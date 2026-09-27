@@ -403,7 +403,9 @@ private fun CoreSettings(model: SettingsScreenModel) {
                 val scope = rememberCoroutineScope()
                 AppButton("Выбрать…", {
                     scope.launch {
-                        platform.pickFile("Файл ядра OpenFlux", listOf("exe"))?.let { path -> model.update { it.copy(customCorePath = path) } }
+                        // No extension filter: the core binary has no extension on macOS/Linux
+                        // (openflux-darwin-arm64, openflux-linux-amd64), only on Windows.
+                        platform.pickFile("Файл ядра OpenFlux", emptyList())?.let { path -> model.update { it.copy(customCorePath = path) } }
                     }
                 }, style = ButtonStyle.Secondary, leading = Icons.Rounded.FolderOpen)
             }
