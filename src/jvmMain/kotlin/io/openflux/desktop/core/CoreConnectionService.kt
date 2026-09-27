@@ -252,7 +252,7 @@ class CoreConnectionService(
                             val up = if (lastAt == 0L) 0 else ((status.bytesOut - lastOut) / seconds).toLong().coerceAtLeast(0)
                             val down = if (lastAt == 0L) 0 else ((status.bytesIn - lastIn) / seconds).toLong().coerceAtLeast(0)
                             lastIn = status.bytesIn; lastOut = status.bytesOut; lastAt = now
-                            _traffic.value = TrafficStats(up, down, status.bytesOut, status.bytesIn, status.active, live = true)
+                            _traffic.value = TrafficStats(up, down, status.bytesOut, status.bytesIn, status.active, status.activeAll, live = true)
                             if (run.settings.mode == ConnectionMode.Client) {
                                 if (status.connected) markConnected(run) else markReconnecting(run)
                             }

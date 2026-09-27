@@ -42,11 +42,17 @@ data class TrafficStats(
     val downBytesPerSec: Long = 0,
     val totalUp: Long = 0,
     val totalDown: Long = 0,
-    /** Carrier data currently goes through ("" when unknown). */
+    /** Carrier data currently goes through ("" when unknown); the first of [activeTransports]. */
     val activeTransport: String = "",
+    /** Every carrier data is spread over: several when they share the top priority. */
+    val activeTransports: List<String> = emptyList(),
     /** Whether the core reports its status (sessions over IPC). */
     val live: Boolean = false,
-)
+) {
+    /** The carriers to show, from a core that names them all or only the first. */
+    val activeCarriers: List<String>
+        get() = activeTransports.ifEmpty { listOf(activeTransport).filter(String::isNotEmpty) }
+}
 
 /** What the client knows about where its traffic leaves. */
 sealed interface ExitAddress {

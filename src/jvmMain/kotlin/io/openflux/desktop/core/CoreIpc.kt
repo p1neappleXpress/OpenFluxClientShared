@@ -42,6 +42,8 @@ data class IpcStatus(
     @SerialName("bytes_out") val bytesOut: Long = 0,
     @SerialName("uptime_ms") val uptimeMs: Long = 0,
     val active: String = "",
+    /** Every carrier data is spread over (equal top priority); cores before it send only [active]. */
+    @SerialName("active_all") val activeAll: List<String> = emptyList(),
 )
 
 sealed interface IpcMessage {

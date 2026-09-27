@@ -4,6 +4,7 @@ import io.openflux.desktop.core.IpcCodec
 import io.openflux.desktop.core.IpcCookiesOffer
 import io.openflux.desktop.core.IpcMessage
 import io.openflux.desktop.core.IpcStatus
+import io.openflux.desktop.model.TrafficStats
 import java.io.ByteArrayInputStream
 import java.io.DataInputStream
 import kotlin.test.Test
@@ -20,6 +21,17 @@ class IpcCodecTest {
         assertEquals(body.toByteArray().size + 1, DataInputStream(ByteArrayInputStream(frame)).readInt())
         val message = IpcCodec.readMessage(ByteArrayInputStream(frame))
         assertEquals(IpcMessage.Status(IpcStatus(true, true, 1234, 56, 7000, "vyandex-2")), message)
+    }
+
+    @Test
+    fun readsEveryActiveCarrier() {
+        val body = """{"running":true,"connected":true,"active":"boards","active_all":["boards","vyandex-2"]}"""
+        val status = (IpcCodec.readMessage(ByteArrayInputStream(IpcCodec.encodeFrame(IpcCodec.STATUS, body))) as IpcMessage.Status).status
+        assertEquals(listOf("boards", "vyandex-2"), status.activeAll)
+        assertEquals(listOf("boards", "vyandex-2"), TrafficStats(activeTransport = status.active, activeTransports = status.activeAll).activeCarriers)
+        // A core that reports only the first carrier.
+        assertEquals(listOf("boards"), TrafficStats(activeTransport = "boards").activeCarriers)
+        assertEquals(emptyList(), TrafficStats().activeCarriers)
     }
 
     @Test

@@ -350,7 +350,9 @@ private fun DetailsColumn(model: HomeScreenModel, selected: Profile?, state: Con
         AppCard {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Трафик", style = AppTheme.typography.sectionTitle, color = AppTheme.colors.text, modifier = Modifier.weight(1f))
-                if (traffic.activeTransport.isNotEmpty()) StatusBadge("через ${TransportType.carrierLabel(traffic.activeTransport)}", Tone.Accent)
+                if (traffic.activeCarriers.isNotEmpty()) {
+                    StatusBadge("через " + traffic.activeCarriers.joinToString(" + ", transform = TransportType::carrierLabel), Tone.Accent)
+                }
             }
             Spacer(Modifier.height(AppTheme.spacing.l))
             // Three in a row when they fit, else two and the total below.
@@ -377,8 +379,8 @@ private fun DetailsColumn(model: HomeScreenModel, selected: Profile?, state: Con
             HorizontalRule()
             KeyValueRow(if (profile.carriers.size > 1) "Транспорты" else "Транспорт", profile.summary)
             HorizontalRule()
-            if (profile.carriers.size > 1 && traffic.activeTransport.isNotEmpty()) {
-                KeyValueRow("Сейчас через", TransportType.carrierLabel(traffic.activeTransport))
+            if (profile.carriers.size > 1 && traffic.activeCarriers.isNotEmpty()) {
+                KeyValueRow("Сейчас через", traffic.activeCarriers.joinToString(" + ", transform = TransportType::carrierLabel))
                 HorizontalRule()
             }
             KeyValueRow("Шифрование", if (profile.secret.isNotEmpty()) "AES-256-GCM" else "Нет ключа")
