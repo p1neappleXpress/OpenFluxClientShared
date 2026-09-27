@@ -78,7 +78,7 @@ class CoreConfigTest {
 
     @Test
     fun sessionExitListensForDirect() {
-        val settings = AppSettings(mode = ConnectionMode.Exit, exitDirectPort = 9000, exitShareHost = "my.host", verboseCoreLog = true)
+        val settings = AppSettings(mode = ConnectionMode.Exit, exitDirectPort = 9000, exitShareHost = "my.host", debugLevel = 2)
         val launch = CoreConfig.build(session, settings, paths)
         val conf = launch.conf!!
         assertTrue("Role = exit" in conf && "Mode = l4" in conf)

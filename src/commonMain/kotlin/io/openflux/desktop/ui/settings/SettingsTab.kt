@@ -418,14 +418,34 @@ private fun CoreSettings(model: SettingsScreenModel) {
         }
     }
     AppCard(padding = AppTheme.spacing.s) {
-        SwitchRow(
-            "Подробный журнал ядра",
-            if (model.android) "Каждое действие транспорта попадает в журнал. Нужен для диагностики"
-            else "Флаг -dd: каждое действие транспорта попадает в журнал. Нужен для диагностики, замедляет работу",
-            settings.verboseCoreLog,
-            { v -> model.update { it.copy(verboseCoreLog = v) } },
-        )
+        Column(Modifier.padding(horizontal = AppTheme.spacing.m, vertical = AppTheme.spacing.s)) {
+            Text("Уровень журнала ядра", style = AppTheme.typography.bodyStrong, color = AppTheme.colors.text)
+            Text(
+                "Выкл — только статус. -d — движение пакетов. -dd — сессии, транспорты, ключи " +
+                    "шифрования (контекст KDF), нужен для диагностики. -ddd — вдобавок дампы пакетов, " +
+                    "самый медленный.",
+                style = AppTheme.typography.bodySmall,
+                color = AppTheme.colors.textSecondary,
+            )
+            Spacer(Modifier.height(AppTheme.spacing.s))
+            Segmented(
+                options = DEBUG_LEVELS,
+                selected = settings.debugLevel,
+                label = ::debugLevelLabel,
+                onSelect = { v -> model.update { it.copy(debugLevel = v) } },
+            )
+        }
     }
+}
+
+private val DEBUG_LEVELS = listOf(0, 1, 2, 3)
+
+private fun debugLevelLabel(level: Int): String = when (level) {
+    0 -> "Выкл"
+    1 -> "-d"
+    2 -> "-dd"
+    3 -> "-ddd"
+    else -> level.toString()
 }
 
 @Composable

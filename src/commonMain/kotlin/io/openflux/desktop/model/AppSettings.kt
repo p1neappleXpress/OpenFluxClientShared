@@ -50,8 +50,11 @@ data class AppSettings(
     val selectedProfileId: String? = null,
     val coreSource: CoreSource = CoreSource.Bundled,
     val customCorePath: String = "",
-    /** The core's --debug: every packet in the log. */
-    val verboseCoreLog: Boolean = false,
+    /**
+     * The core's --debug level: 0 off, 1 packet movement (-d), 2 operational
+     * logs incl. session/crypto/KDF context (-dd), 3 hexdumps (-ddd).
+     */
+    val debugLevel: Int = 0,
     val logAutoScroll: Boolean = true,
     /** Hide document URLs and keys in the log view. */
     val maskSensitive: Boolean = true,
