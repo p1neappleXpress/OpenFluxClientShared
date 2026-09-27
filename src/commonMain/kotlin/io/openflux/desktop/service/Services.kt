@@ -5,6 +5,7 @@ import io.openflux.desktop.model.AppSettings
 import io.openflux.desktop.model.CaptchaPrompt
 import io.openflux.desktop.model.ConnectionState
 import io.openflux.desktop.model.ExitAddress
+import io.openflux.desktop.model.LogLevel
 import io.openflux.desktop.model.LogLine
 import io.openflux.desktop.model.NewChannel
 import io.openflux.desktop.model.NodePlan
@@ -128,6 +129,12 @@ interface NodeWizardService {
 
     /** The Yandex page while [createDocument] runs. */
     val documentPage: StateFlow<BrowserPage?>
+
+    /** This attempt's trace: every SSH/RPC call and the wizard's own step narration, for the Logs tab. */
+    val logs: StateFlow<List<LogLine>>
+    fun clearLogs()
+    /** Adds a line to [logs] from outside (the wizard model's own step narration). */
+    fun note(text: String, level: LogLevel = LogLevel.Info)
 
     /**
      * Opens Yandex in the built-in browser (downloaded on first use) for the

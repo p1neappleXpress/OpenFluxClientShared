@@ -31,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.flow.combine
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,7 +64,10 @@ import org.jetbrains.compose.resources.painterResource
 enum class LogFilter(val label: String) { All("Все"), Important("Важные"), Errors("Ошибки") }
 
 class LogsScreenModel(private val container: AppContainer) : ScreenModel {
-    val logs = container.connection.logs
+    /** The core's own log and the node wizard's SSH/RPC trace, merged by time for one timeline. */
+    val logs = combine(container.connection.logs, container.nodeWizard.logs) { core, wizard ->
+        if (wizard.isEmpty()) core else (core + wizard).sortedWith(compareBy({ it.time }, { it.id }))
+    }
     val settings = container.settings
     var query by mutableStateOf("")
     var filter by mutableStateOf(LogFilter.All)
@@ -83,7 +87,10 @@ class LogsScreenModel(private val container: AppContainer) : ScreenModel {
     fun copy(lines: List<LogLine>, mask: Boolean) =
         container.platform.setClipboardText(lines.joinToString("\n") { if (mask) Redact.apply(it.text) else it.text })
 
-    fun clear() = container.connection.clearLogs()
+    fun clear() {
+        container.connection.clearLogs()
+        container.nodeWizard.clearLogs()
+    }
 
     fun setAutoScroll(on: Boolean) = settings.update { it.copy(logAutoScroll = on) }
 }
@@ -102,7 +109,7 @@ object LogsTab : Tab {
 
 @Composable
 private fun LogsScreen(model: LogsScreenModel) {
-    val all by model.logs.collectAsState()
+    val all by model.logs.collectAsState(initial = emptyList())
     val settings by model.settings.settings.collectAsState()
     val toaster = LocalToaster.current
     val visible = model.visible(all)

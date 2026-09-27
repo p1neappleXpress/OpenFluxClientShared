@@ -8,6 +8,7 @@ import io.openflux.desktop.model.ConnectionMode
 import io.openflux.desktop.model.ConnectionState
 import io.openflux.desktop.model.ExitAddress
 import io.openflux.desktop.model.KnownServer
+import io.openflux.desktop.model.LogLevel
 import io.openflux.desktop.model.NewChannel
 import io.openflux.desktop.model.NodeDocuments
 import io.openflux.desktop.model.NodePlan
@@ -196,7 +197,10 @@ class NodeWizardModel(private val container: AppContainer, private val scope: Co
         launchCall("Открываю Яндекс во встроенном браузере…") {
             try {
                 val fileName = NodeDocuments.fileName(name, host, container.platform.now())
-                val document = service.createDocument(fileName) { documentProgress = it }
+                val document = service.createDocument(fileName) { step ->
+                    documentProgress = step
+                    service.note(step, LogLevel.Debug)
+                }
                 yandexCookies = document.cookieHeader.takeIf(NodeDocuments::signedIn).orEmpty()
                 cookiesDocument = document.url
                 checkNow(document.url)
@@ -471,15 +475,21 @@ class NodeWizardModel(private val container: AppContainer, private val scope: Co
         busy = message
         error = null
         notice = null
+        service.note(message)
         job = scope.launch {
             try {
                 block()
+                service.note("$message — готово", LogLevel.Success)
             } catch (e: CancellationException) {
+                service.note("$message — отменено", LogLevel.Warning)
                 throw e
             } catch (e: NodeWizardException) {
+                service.note(e.message ?: "Ошибка мастера", LogLevel.Error)
                 if (!onFailure(e)) error = e.message
             } catch (e: Exception) {
-                error = e.message ?: "Ошибка мастера"
+                val text = e.message ?: "Ошибка мастера"
+                service.note(text, LogLevel.Error)
+                error = text
             } finally {
                 busy = null
             }

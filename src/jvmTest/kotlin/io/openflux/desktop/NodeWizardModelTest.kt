@@ -7,6 +7,7 @@ import io.openflux.desktop.model.ConnectionMode
 import io.openflux.desktop.model.ConnectionState
 import io.openflux.desktop.model.ExitAddress
 import io.openflux.desktop.model.KnownServer
+import io.openflux.desktop.model.LogLevel
 import io.openflux.desktop.model.LogLine
 import io.openflux.desktop.model.NewChannel
 import io.openflux.desktop.model.NodePlan
@@ -372,6 +373,12 @@ class NodeWizardModelTest {
         }
         override fun cancelDocument() = Unit
         override fun close() { closed = true }
+
+        val notes = mutableListOf<String>()
+        private val _logs = MutableStateFlow<List<LogLine>>(emptyList())
+        override val logs: StateFlow<List<LogLine>> = _logs
+        override fun clearLogs() { _logs.value = emptyList() }
+        override fun note(text: String, level: LogLevel) { notes += text }
     }
 
     private class FakeConnection(private val exitIp: String) : ConnectionService {
