@@ -53,6 +53,7 @@ import io.openflux.desktop.model.ConnectionMode
 import io.openflux.desktop.model.ConnectionState
 import io.openflux.desktop.model.ExitAddress
 import io.openflux.desktop.model.Profile
+import io.openflux.desktop.model.TransportType
 import io.openflux.desktop.model.isActive
 import io.openflux.desktop.service.AppContainer
 import io.openflux.desktop.service.LocalAppContainer
@@ -349,7 +350,7 @@ private fun DetailsColumn(model: HomeScreenModel, selected: Profile?, state: Con
         AppCard {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Трафик", style = AppTheme.typography.sectionTitle, color = AppTheme.colors.text, modifier = Modifier.weight(1f))
-                if (traffic.activeTransport.isNotEmpty()) StatusBadge("через ${traffic.activeTransport}", Tone.Accent)
+                if (traffic.activeTransport.isNotEmpty()) StatusBadge("через ${TransportType.carrierLabel(traffic.activeTransport)}", Tone.Accent)
             }
             Spacer(Modifier.height(AppTheme.spacing.l))
             // Three in a row when they fit, else two and the total below.
@@ -374,8 +375,12 @@ private fun DetailsColumn(model: HomeScreenModel, selected: Profile?, state: Con
             HorizontalRule()
             KeyValueRow("Профиль", profile.name)
             HorizontalRule()
-            KeyValueRow("Транспорт", profile.summary)
+            KeyValueRow(if (profile.carriers.size > 1) "Транспорты" else "Транспорт", profile.summary)
             HorizontalRule()
+            if (profile.carriers.size > 1 && traffic.activeTransport.isNotEmpty()) {
+                KeyValueRow("Сейчас через", TransportType.carrierLabel(traffic.activeTransport))
+                HorizontalRule()
+            }
             KeyValueRow("Шифрование", if (profile.secret.isNotEmpty()) "AES-256-GCM" else "Нет ключа")
             // Android's VPN carries the traffic itself; its proxy runs only without it.
             if (!exitMode && !(android && settings.fullTunnel)) {

@@ -55,6 +55,13 @@ enum class TransportType(
 
     companion object {
         fun fromCli(name: String): TransportType? = entries.firstOrNull { it.cliName == name }
+
+        /** A Session carrier's name as the core reports it ("boards", "boards-2") for the UI: "Board", "Board 2". */
+        fun carrierLabel(name: String): String {
+            val type = fromCli(name.substringBefore('-')) ?: return name
+            val n = name.substringAfter('-', "")
+            return if (n.isEmpty()) type.shortLabel else "${type.shortLabel} $n"
+        }
     }
 }
 

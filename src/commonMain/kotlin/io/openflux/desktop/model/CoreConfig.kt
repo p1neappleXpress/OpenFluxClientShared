@@ -67,12 +67,15 @@ object CoreConfig {
                     }
                 }
             }
-            if (exit) {
-                val directPriority = profile.carriers.firstOrNull { it.type == TransportType.DIRECT }?.priority ?: 50
+            // The exit listens for direct only when the profile has it; its
+            // address there is what clients dial, the exit takes the port
+            // from the settings.
+            val direct = profile.carriers.firstOrNull { it.type == TransportType.DIRECT }
+            if (exit && direct != null) {
                 appendLine()
                 appendLine("[Transport direct]")
                 appendLine("Type = direct")
-                appendLine("Priority = $directPriority")
+                appendLine("Priority = ${direct.priority}")
                 appendLine("Listen = 0.0.0.0:${settings.exitDirectPort}")
             }
         }

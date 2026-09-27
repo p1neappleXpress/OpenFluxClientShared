@@ -282,7 +282,7 @@ private fun ConnectionSettings(model: SettingsScreenModel) {
         }
         Spacer(Modifier.height(AppTheme.spacing.s))
         Text(
-            "Нода принимает клиентов через документ профиля и напрямую по TCP на этот порт. Адрес попадает в QR-код; оставьте пустым, чтобы ядро подставило внешний IP.",
+            "Если в профиле есть Direct, нода принимает клиентов ещё и напрямую по TCP на этот порт. Адрес попадает в QR-код; оставьте пустым, чтобы ядро подставило внешний IP.",
             style = AppTheme.typography.bodySmall,
             color = AppTheme.colors.textSecondary,
         )

@@ -91,6 +91,24 @@ class CoreConfigTest {
     }
 
     @Test
+    fun sessionExitWithoutDirectDoesNotListenForIt() {
+        val noDirect = session.copy(extras = session.extras.filter { it.type != TransportType.DIRECT })
+        val launch = CoreConfig.build(noDirect, AppSettings(mode = ConnectionMode.Exit, exitDirectPort = 9000), paths)
+        val conf = launch.conf!!
+        assertFalse("[Transport direct]" in conf, "direct was not chosen in the profile")
+        assertFalse("Listen =" in conf)
+        assertTrue("[Transport vyandex]" in conf && "[Transport vyandex-2]" in conf)
+    }
+
+    @Test
+    fun carrierLabels() {
+        assertEquals("Board", TransportType.carrierLabel("boards"))
+        assertEquals("Board 2", TransportType.carrierLabel("boards-2"))
+        assertEquals("Direct", TransportType.carrierLabel("direct"))
+        assertEquals("custom", TransportType.carrierLabel("custom"))
+    }
+
+    @Test
     fun classicUsesFlags() {
         val classic = Profile(id = "c", name = "Old", transport = TransportType.YANDEX, value = "https://disk.yandex.ru/i/x")
         val launch = CoreConfig.build(classic, AppSettings(), paths.copy(keyFile = null))

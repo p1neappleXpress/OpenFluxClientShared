@@ -206,7 +206,7 @@ class CoreConnectionService(
                 val level = levelOf(line)
                 log(level, line)
                 friendlyProblem(line)?.let { run.lastProblem = it }
-                SHARE_LINK.find(line)?.let { _exitShareLink.value = it.value }
+                if (!run.stopping) SHARE_LINK.find(line)?.let { _exitShareLink.value = it.value }
                 // Without IPC (classic profiles) the core's start banner is
                 // the only sign it is up.
                 if (line.contains("Running as CLIENT") || line.contains("Running as EXIT NODE")) {
@@ -241,6 +241,9 @@ class CoreConnectionService(
             run.ipc = ipc
             try {
                 ipc.readMessages { message ->
+                    // A stopped run's last messages must not overwrite what
+                    // cleanup reset or the next run already reports.
+                    if (run.stopping) return@readMessages
                     when (message) {
                         is IpcMessage.Status -> {
                             val status = message.status
