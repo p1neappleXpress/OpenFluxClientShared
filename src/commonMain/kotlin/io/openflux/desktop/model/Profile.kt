@@ -126,9 +126,11 @@ data class Profile(
             val value = carrier.value.trim()
             return when (carrier.type.kind) {
                 ValueKind.DocumentUrl -> when {
+                    // Cups.online with no rooms is valid: the node generates its own
+                    // and prints the string for the client (transport/cupsonline.enterRooms).
+                    carrier.type == TransportType.CUPSONLINE -> null
                     value.isEmpty() -> "нужна ссылка"
-                    carrier.type != TransportType.CUPSONLINE && !value.startsWith("https://") ->
-                        "ссылка должна начинаться с https://"
+                    !value.startsWith("https://") -> "ссылка должна начинаться с https://"
                     else -> null
                 }
                 ValueKind.Address -> if (!Regex("""^[^\s:]+:\d{1,5}$""").matches(value)) "нужен адрес host:port" else null
