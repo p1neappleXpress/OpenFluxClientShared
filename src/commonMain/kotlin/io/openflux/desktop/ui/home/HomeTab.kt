@@ -344,6 +344,17 @@ private fun DetailsColumn(model: HomeScreenModel, selected: Profile?, state: Con
         if (state is ConnectionState.Reconnecting) {
             Banner("Связь с нодой потеряна. Ядро переподключается само, трафик пойдёт, как только канал поднимется.", Tone.Warning)
         }
+        // Without Session mode "connected" only means the carrier reached the
+        // document; a failed check through the tunnel is the first sign that
+        // the node on the other side does not answer.
+        if (state is ConnectionState.Connected && !exitMode && exitAddress is ExitAddress.Unavailable) {
+            Banner(
+                "Канал поднят, но нода не отвечает: запрос через туннель не прошёл. Проверьте, что нода запущена с той же ссылкой, ключом и кодеком.",
+                Tone.Warning,
+            ) {
+                TextAction("Проверить ещё раз", model.connection::refreshExitAddress)
+            }
+        }
 
         val main: @Composable () -> Unit = {
         AppCard {
