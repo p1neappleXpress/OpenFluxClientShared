@@ -125,11 +125,28 @@ class CoreConfigTest {
     }
 
     @Test
+    fun classicRunsAsExit() {
+        val classic = Profile(id = "c", name = "Old", transport = TransportType.YANDEX, value = "https://disk.yandex.ru/i/x", secret = secret)
+        val launch = CoreConfig.build(classic, AppSettings(mode = ConnectionMode.Exit, exitShareHost = "my.host", debugLevel = 1), paths)
+        assertNull(launch.conf)
+        assertEquals(
+            listOf(
+                "--role=exit", "--mode=l4",
+                "--transport=yandex", "--codec=batched", "--url=https://disk.yandex.ru/i/x",
+                "--encryption-key-file=C:/rt/key", "--cookie-store=C:/cfg/cookies/p.json",
+                "--share", "--share-host=my.host", "--debug=1",
+            ),
+            launch.arguments,
+        )
+        assertNull(launch.socksAddress)
+        assertNull(launch.httpProxyAddress)
+        assertFalse(launch.usesIpc)
+    }
+
+    @Test
     fun refusesWhatTheCoreWouldMisread() {
         val cut = session.copy(value = "https://disk.yandex.ru/i/one#frag")
         assertFailsWith<IllegalArgumentException> { CoreConfig.build(cut, AppSettings(), paths) }
-        val classicExit = Profile(id = "c", name = "Old", transport = TransportType.YANDEX, value = "https://disk.yandex.ru/i/x")
-        assertFailsWith<IllegalArgumentException> { CoreConfig.build(classicExit, AppSettings(mode = ConnectionMode.Exit), paths) }
         assertFailsWith<IllegalArgumentException> { CoreConfig.build(session.copy(secret = "short"), AppSettings(), paths) }
     }
 

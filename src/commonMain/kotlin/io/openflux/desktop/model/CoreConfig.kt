@@ -29,10 +29,9 @@ object CoreConfig {
         val problems = profile.problems()
         require(problems.isEmpty()) { problems.first() }
         val exit = settings.mode == ConnectionMode.Exit
-        require(!exit || profile.session) { "Выходной ноде нужен профиль в режиме Session" }
         val socks = "$LOOPBACK:${settings.socksPort}"
         val http = "$LOOPBACK:${settings.socksPort + 1}"
-        return if (profile.session) session(profile, settings, paths, exit, socks, http) else classic(profile, settings, paths, socks, http)
+        return if (profile.session) session(profile, settings, paths, exit, socks, http) else classic(profile, settings, paths, exit, socks, http)
     }
 
     private fun session(profile: Profile, settings: AppSettings, paths: CorePaths, exit: Boolean, socks: String, http: String): CoreLaunch {
@@ -98,12 +97,18 @@ object CoreConfig {
         return CoreLaunch(args, conf, if (proxies) socks else null, if (proxies) http else null, usesIpc = paths.ipcSocket != null)
     }
 
-    private fun classic(profile: Profile, settings: AppSettings, paths: CorePaths, socks: String, http: String): CoreLaunch {
+    private fun classic(profile: Profile, settings: AppSettings, paths: CorePaths, exit: Boolean, socks: String, http: String): CoreLaunch {
         val args = buildList {
-            add("--role=client")
-            if (settings.fullTunnel) {
+            if (exit) {
+                // The same l4 exit a Session profile runs, serving classic
+                // clients of this transport.
+                add("--role=exit")
+                add("--mode=l4")
+            } else if (settings.fullTunnel) {
+                add("--role=client")
                 add("--inbound=tun")
             } else {
+                add("--role=client")
                 add("--inbound=socks5")
                 add("--socks5=$socks")
                 add("--http-proxy=$http")
@@ -118,9 +123,13 @@ object CoreConfig {
             }
             if (paths.keyFile != null) add("--encryption-key-file=${paths.keyFile}")
             add("--cookie-store=${paths.cookieStore}")
+            if (exit) {
+                add("--share")
+                if (settings.exitShareHost.isNotBlank()) add("--share-host=${settings.exitShareHost.trim()}")
+            }
             if (settings.debugLevel > 0) add("--debug=${settings.debugLevel}")
         }
-        return if (settings.fullTunnel) CoreLaunch(args, null, null, null, usesIpc = false)
+        return if (exit || settings.fullTunnel) CoreLaunch(args, null, null, null, usesIpc = false)
         else CoreLaunch(args, null, socks, http, usesIpc = false)
     }
 
