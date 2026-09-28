@@ -1,7 +1,6 @@
 package io.openflux.desktop.ui.node
 
 import io.openflux.desktop.ui.PlatformBackHandler
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -40,11 +39,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import io.openflux.desktop.service.LocalAppContainer
-import io.openflux.desktop.ui.LocalBrowserViews
 import io.openflux.desktop.ui.LocalScrollbars
 import io.openflux.desktop.ui.components.AppButton
 import io.openflux.desktop.ui.components.AppCard
@@ -62,7 +59,6 @@ import io.openflux.desktop.ui.components.SectionLabel
 import io.openflux.desktop.ui.components.Segmented
 import io.openflux.desktop.ui.components.TextAction
 import io.openflux.desktop.ui.components.Tone
-import io.openflux.desktop.ui.components.windowSize
 import io.openflux.desktop.ui.LocalTouchUi
 import io.openflux.desktop.ui.theme.AppTheme
 
@@ -282,9 +278,6 @@ private fun ColumnScope.ServerStep(model: NodeWizardModel) {
 @Composable
 private fun ColumnScope.DocumentStep(model: NodeWizardModel) {
     val idle = model.busy == null
-    val page by model.documentPage.collectAsState()
-    val progress = model.documentProgress
-    val creating = progress != null
     model.probe?.let { probe ->
         AppCard(padding = 0.dp) {
             KeyValueRow("Сервер", "${model.user.trim()}@${model.host.trim()}")
@@ -299,34 +292,8 @@ private fun ColumnScope.DocumentStep(model: NodeWizardModel) {
     }
     AppTextField(model.name, { model.name = it }, label = "Название профиля", enabled = idle)
     model.channel?.let { Note("Канал: ${it.id}. Для него создан отдельный ключ шифрования, его знают только это устройство и нода.") }
-    Actions {
-        if (creating) {
-            AppButton("Отменить вход в Яндекс", model::cancelDocument, style = ButtonStyle.Secondary)
-        } else {
-            AppButton("Войти в Яндекс и создать документ", model::createDocument, leadingResource = AppIcons.Yandex, enabled = idle)
-        }
-    }
-    if (progress != null) {
-        Spacer(Modifier.height(AppTheme.spacing.m))
-        Banner(progress, Tone.Accent, icon = Icons.Rounded.Info)
-    }
-    val shown = page
-    if (shown != null) {
-        Spacer(Modifier.height(AppTheme.spacing.m))
-        Box(
-            Modifier.fillMaxWidth().height((windowSize().height - 200.dp).coerceIn(360.dp, 760.dp)).clip(AppTheme.shapes.card)
-                .border(1.dp, AppTheme.colors.border, AppTheme.shapes.card),
-        ) {
-            LocalBrowserViews.current.Page(shown, Modifier.fillMaxSize())
-        }
-    } else {
-        Note(
-            "Вход откроется прямо здесь, во встроенном браузере. Документ появится в папке openflux на вашем Яндекс Диске " +
-                "с доступом «Редактирование» по ссылке. После этого браузер забывает вход, остаются только cookies для ноды.",
-        )
-    }
     Spacer(Modifier.height(AppTheme.spacing.xl))
-    SectionLabel("Или свой пустой документ")
+    SectionLabel("Свой пустой документ")
     Spacer(Modifier.height(AppTheme.spacing.s))
     AppTextField(model.documentInput, { model.documentInput = it.trim() }, placeholder = "https://disk.yandex.ru/edit/d/…",
         monospace = true, enabled = idle, helper = "Ссылка с доступом «Редактирование» из «Поделиться»")
