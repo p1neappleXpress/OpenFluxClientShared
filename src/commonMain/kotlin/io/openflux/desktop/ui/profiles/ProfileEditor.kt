@@ -1,5 +1,10 @@
 package io.openflux.desktop.ui.profiles
 
+import androidx.compose.runtime.collectAsState
+import io.openflux.desktop.model.AccountKind
+import io.openflux.desktop.model.AuthStatus
+import io.openflux.desktop.ui.accounts.AccountsScreenModel
+import io.openflux.desktop.ui.components.StatusBadge
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -161,6 +166,7 @@ fun ProfileEditor(model: ProfilesScreenModel, state: EditorState, onBack: (() ->
                         session = draft.session,
                         showPriority = draft.session,
                         onChange = { c -> model.updateDraft { it.copy(transport = c.type, value = c.value, uid = c.uid, priority = c.priority) } },
+                        account = { AccountDocumentRow(model, 0, draft.transport) },
                     )
                     if (!draft.session) {
                         Spacer(Modifier.height(AppTheme.spacing.l))
@@ -183,9 +189,13 @@ fun ProfileEditor(model: ProfilesScreenModel, state: EditorState, onBack: (() ->
                                     }, icon = Icons.Rounded.Close)
                                 }
                                 Spacer(Modifier.height(AppTheme.spacing.s))
-                                CarrierFields(extra, session = true, showPriority = true) { changed ->
-                                    model.updateDraft { p -> p.copy(extras = p.extras.mapIndexed { i, e -> if (i == index) changed else e }) }
-                                }
+                                CarrierFields(
+                                    extra, session = true, showPriority = true,
+                                    onChange = { changed ->
+                                        model.updateDraft { p -> p.copy(extras = p.extras.mapIndexed { i, e -> if (i == index) changed else e }) }
+                                    },
+                                    account = { AccountDocumentRow(model, index + 1, extra.type) },
+                                )
                             }
                         }
                         AppButton("Добавить транспорт", {
@@ -224,7 +234,13 @@ fun ProfileEditor(model: ProfilesScreenModel, state: EditorState, onBack: (() ->
 }
 
 @Composable
-private fun CarrierFields(carrier: ExtraTransport, session: Boolean, showPriority: Boolean, onChange: (ExtraTransport) -> Unit) {
+private fun CarrierFields(
+    carrier: ExtraTransport,
+    session: Boolean,
+    showPriority: Boolean,
+    onChange: (ExtraTransport) -> Unit,
+    account: @Composable () -> Unit = {},
+) {
     Column(verticalArrangement = Arrangement.spacedBy(AppTheme.spacing.m)) {
         TransportDropdown(carrier.type, session) { onChange(carrier.copy(type = it)) }
         Row(horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.m)) {
@@ -254,6 +270,46 @@ private fun CarrierFields(carrier: ExtraTransport, session: Boolean, showPriorit
         if (carrier.type == TransportType.ONEME) {
             AppTextField(carrier.uid, { onChange(carrier.copy(uid = it.trim())) }, label = "ID пользователя MAX", placeholder = "Число из адреса звонка")
         }
+        account()
+    }
+}
+
+/**
+ * Under a document field: whether the service's account is signed in, and
+ * a button that creates the document with it (signing in first if needed).
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AccountDocumentRow(model: ProfilesScreenModel, index: Int, type: TransportType) {
+    if (type == TransportType.CUPSONLINE) {
+        CupsRoomsRow(model, index)
+        return
+    }
+    val kind = AccountKind.of(type) ?: return
+    val statuses by model.accounts.status.collectAsState()
+    val status = statuses[kind] ?: AuthStatus.SignedOut
+    val (text, tone) = AccountsScreenModel.statusText(status, model.platform.now())
+    val busy = model.documentBusy != null
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.s),
+        verticalArrangement = Arrangement.spacedBy(AppTheme.spacing.s),
+        itemVerticalAlignment = Alignment.CenterVertically,
+    ) {
+        StatusBadge("${kind.label}: ${text.replaceFirstChar { it.lowercase() }}", tone)
+        if (kind.createsDocuments) {
+            val label = when {
+                model.documentBusy == index -> "Создаю документ…"
+                status is AuthStatus.SignedIn -> "Создать документ"
+                status is AuthStatus.Expired -> "Войти заново и создать"
+                else -> "Войти и создать документ"
+            }
+            AppButton(label, { model.createDocumentFor(index) }, style = ButtonStyle.Secondary, enabled = !busy, leadingResource = AppIcons.Add)
+        } else if (kind.signsIn && (status is AuthStatus.SignedOut || status is AuthStatus.Expired)) {
+            AppButton("Войти в ${kind.label}", { model.signIn(kind) }, style = ButtonStyle.Secondary, enabled = !busy)
+        }
+    }
+    if (model.documentError != null && model.documentErrorIndex == index) {
+        Text(model.documentError.orEmpty(), style = AppTheme.typography.bodySmall, color = AppTheme.colors.danger)
     }
 }
 
@@ -312,5 +368,37 @@ private fun IconPicker(selected: String, onSelect: (String) -> Unit) {
                 Icon(painterResource(AppIcons.byName(name)), name, tint = if (isSelected) Color.White else AppTheme.colors.textSecondary, modifier = Modifier.size(20.dp))
             }
         }
+    }
+}
+
+/**
+ * Under a Cups.online field: opens new rooms here, no exit needed first.
+ * The same string goes to the node, which then joins these rooms.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CupsRoomsRow(model: ProfilesScreenModel, index: Int) {
+    val busy = model.documentBusy != null
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.s),
+        verticalArrangement = Arrangement.spacedBy(AppTheme.spacing.s),
+        itemVerticalAlignment = Alignment.CenterVertically,
+    ) {
+        AppButton(
+            if (model.documentBusy == index) "Создаю комнаты…" else "Сгенерировать комнаты",
+            { model.generateRoomsFor(index) },
+            style = ButtonStyle.Secondary,
+            enabled = !busy,
+            leadingResource = AppIcons.Add,
+        )
+    }
+    Text(
+        "Вход не нужен: OpenFlux откроет 4 комнаты на cups.online. " +
+            "Эту же строку укажите ноде — она зайдёт в эти комнаты, а не создаст свои.",
+        style = AppTheme.typography.caption,
+        color = AppTheme.colors.textSecondary,
+    )
+    if (model.documentError != null && model.documentErrorIndex == index) {
+        Text(model.documentError.orEmpty(), style = AppTheme.typography.bodySmall, color = AppTheme.colors.danger)
     }
 }

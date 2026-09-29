@@ -1,6 +1,8 @@
 package io.openflux.desktop.service
 
 import androidx.compose.runtime.staticCompositionLocalOf
+import io.openflux.desktop.model.AccountKind
+import io.openflux.desktop.model.AccountSession
 import io.openflux.desktop.model.AppSettings
 import io.openflux.desktop.model.CaptchaPrompt
 import io.openflux.desktop.model.ConnectionState
@@ -9,6 +11,7 @@ import io.openflux.desktop.model.LogLevel
 import io.openflux.desktop.model.LogLine
 import io.openflux.desktop.model.NewChannel
 import io.openflux.desktop.model.NodePlan
+import io.openflux.desktop.model.NodeTransport
 import io.openflux.desktop.model.ServerProbe
 import io.openflux.desktop.model.SshTarget
 import io.openflux.desktop.model.Profile
@@ -30,6 +33,13 @@ interface ProfileRepository {
 interface SettingsRepository {
     val settings: StateFlow<AppSettings>
     fun update(transform: (AppSettings) -> AppSettings)
+}
+
+/** Saved sign-ins, one per service. The file is readable by its owner only. */
+interface AccountRepository {
+    val sessions: StateFlow<Map<AccountKind, AccountSession>>
+    fun save(session: AccountSession)
+    fun remove(kind: AccountKind)
 }
 
 /** Runs the OpenFlux core for one profile at a time. */
@@ -54,6 +64,14 @@ interface ConnectionService {
     fun openCaptcha()
     fun submitCaptcha()
     fun dismissCaptcha()
+
+    /**
+     * Hands the saved sign-in of [kind] to the exit over the tunnel, for
+     * each of the profile's transports of that service; the exit applies
+     * and keeps it. Returns how many transports it went to.
+     */
+    suspend fun pushAccountToExit(kind: AccountKind): Int =
+        throw UnsupportedOperationException("Передать вход ноде здесь нельзя")
 
     /** Stops the core and undoes system changes; called once on app exit. */
     fun shutdown()
@@ -109,6 +127,9 @@ interface PlatformServices {
     fun now(): Long
     /** Newest app release tag on GitHub, null when unknown. */
     suspend fun latestRelease(): String?
+
+    /** New cups.online rooms, packed the way the core takes them; throws when none could be opened. */
+    suspend fun newCupsRooms(): String = throw UnsupportedOperationException("Комнаты здесь не создаются")
 }
 
 /**
@@ -121,15 +142,28 @@ interface NodeWizardService {
     /** SSH in, download the pinned installer and look at the server. */
     suspend fun connect(target: SshTarget): ServerProbe
     suspend fun newChannel(): NewChannel
-    /** What installing [channel] would change; port 0 lets the server pick. */
-    suspend fun plan(channel: String, withCookies: Boolean): NodePlan
-    /** Install and start the channel. [cookieHeader] "" leaves the node signed out. */
-    suspend fun apply(channel: NewChannel, documentUrl: String, port: Int, sudoPassword: String, cookieHeader: String)
+    /**
+     * What installing [channel] with [transports] (besides direct) would
+     * change; the server picks the port. [autoUpdate] turns the server's
+     * core updater on or off.
+     */
+    suspend fun plan(channel: String, transports: List<NodeTransport>, withCookies: Boolean, autoUpdate: Boolean): NodePlan
+    /** Install and start the channel. [cookieHeader] "" leaves the node signed out of Yandex. */
+    suspend fun apply(
+        channel: NewChannel,
+        transports: List<NodeTransport>,
+        port: Int,
+        autoUpdate: Boolean,
+        sudoPassword: String,
+        cookieHeader: String,
+    )
     suspend fun remove(channel: String, sudoPassword: String)
-    /** Whether the node can use the document (edit by link), as an anonymous visitor. */
+    /** Whether the node can use the Yandex document (edit by link), as an anonymous visitor. */
     suspend fun checkDocument(documentUrl: String)
-    /** The channel's `openflux://` link: the document, direct to host:port as backup. */
-    suspend fun shareLink(name: String, documentUrl: String, key: String, host: String, port: Int): String
+    /** New cups.online rooms for the channel: the packed list the node and its link take. */
+    suspend fun createCupsRooms(): String
+    /** The channel's `openflux://` link: [transports], then direct to host:port as the backup. */
+    suspend fun shareLink(name: String, key: String, host: String, port: Int, transports: List<NodeTransport>): String
     /** The addresses [host] resolves to, to compare with the tunnel's exit. */
     suspend fun resolve(host: String): Set<String>
 
@@ -163,6 +197,7 @@ class AppContainer(
     val platform: PlatformServices,
     val shareCodec: ShareLinkCodec,
     val nodeWizard: NodeWizardService,
+    val accounts: Accounts,
 ) {
     /** An `openflux://` link opened from outside (a scanned code, a chat); the Profiles screen imports it. */
     val incomingLink = MutableStateFlow<String?>(null)

@@ -1,5 +1,10 @@
 package io.openflux.desktop.ui.home
 
+import androidx.compose.runtime.rememberCoroutineScope
+import io.openflux.desktop.ui.components.AppDialog
+import io.openflux.desktop.model.ProfileSource
+import io.openflux.desktop.model.AuthStatus
+import io.openflux.desktop.model.AccountKind
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -345,6 +350,7 @@ private fun DetailsColumn(model: HomeScreenModel, selected: Profile?, state: Con
         if (state is ConnectionState.Reconnecting) {
             Banner("Связь с нодой потеряна. Ядро переподключается само, трафик пойдёт, как только канал поднимется.", Tone.Warning)
         }
+        AccountBanners(model, profile, state)
 
         val main: @Composable () -> Unit = {
         AppCard {
@@ -533,5 +539,51 @@ private fun Metric(label: String, value: String, icon: ImageVector?, modifier: M
         }
         Spacer(Modifier.height(4.dp))
         Text(value, style = AppTheme.typography.metric, color = AppTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/**
+ * A saved sign-in the profile needs has expired: one button signs in
+ * again. And, for a connected Session of someone else's node, handing it
+ * your sign-in, only when asked and after a warning.
+ */
+@Composable
+private fun AccountBanners(model: HomeScreenModel, profile: Profile, state: ConnectionState) {
+    val status by model.accounts.status.collectAsState()
+    val toaster = LocalToaster.current
+    val scope = rememberCoroutineScope()
+    var confirm by remember { mutableStateOf<AccountKind?>(null) }
+    val report = { text: String, ok: Boolean -> toaster.show(text, if (ok) Tone.Success else Tone.Danger) }
+    for ((kind, st) in model.accountAlerts(profile, status)) {
+        val text = if (st is AuthStatus.Expired) "Сессия ${kind.label} истекла: документы и нода не смогут войти под вашим аккаунтом."
+        else "${kind.label} просит проверку: войдите заново, чтобы обновить сессию."
+        Banner(text, Tone.Danger, icon = Icons.Rounded.ErrorOutline) {
+            AppButton("Войти заново", { model.relogin(kind, scope, report) })
+        }
+    }
+    val pushable = model.pushable(profile, state)
+    if (pushable.isNotEmpty() && profile.source != ProfileSource.Node) {
+        Row(horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.m)) {
+            pushable.forEach { kind -> TextAction("Передать вход ${kind.label} этой ноде…", { confirm = kind }) }
+        }
+    }
+    confirm?.let { kind ->
+        AppDialog(
+            title = "Передать вход ${kind.label} ноде?",
+            onDismiss = { confirm = null },
+            primary = "Передать",
+            primaryStyle = ButtonStyle.Danger,
+            onPrimary = {
+                confirm = null
+                model.pushToExit(kind, scope, report)
+            },
+        ) {
+            Text(
+                "Нода сможет открывать документы от имени вашего аккаунта ${kind.label}. " +
+                    "Делайте это только для своей ноды. Своим нодам из мастера вход передаётся сам.",
+                style = AppTheme.typography.body,
+                color = AppTheme.colors.text,
+            )
+        }
     }
 }

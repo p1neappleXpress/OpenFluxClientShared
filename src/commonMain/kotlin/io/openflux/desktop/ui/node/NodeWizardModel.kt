@@ -12,6 +12,8 @@ import io.openflux.desktop.model.LogLevel
 import io.openflux.desktop.model.NewChannel
 import io.openflux.desktop.model.NodeDocuments
 import io.openflux.desktop.model.NodePlan
+import io.openflux.desktop.model.NodeTransport
+import io.openflux.desktop.model.NodeTransports
 import io.openflux.desktop.model.NodeServers
 import io.openflux.desktop.model.NodeWizardException
 import io.openflux.desktop.model.Profile
@@ -36,8 +38,10 @@ data class HostKeyPrompt(val fingerprint: String, val mismatch: Boolean)
 /**
  * "Своя нода": installs a new, independent channel on the user's VDS and
  * hands back a verified profile, like the Android NodeWizardActivity. Steps:
- * SSH to the server, the channel's Yandex document, what will change on the
- * server, install, then a real connection through the new node. Running it
+ * SSH to the server, the channel's transports (any of a Yandex document, a
+ * Mail.ru document and cups.online rooms, direct always as the backup),
+ * what will change on the server, install, then a real connection through
+ * the new node. Running it
  * again on the same server adds another channel next to the existing ones.
  *
  * The SSH password, private key and sudo password live only in this object
@@ -75,10 +79,17 @@ class NodeWizardModel(private val container: AppContainer, private val scope: Co
     /** When the server last answered: SSH may drop while the user signs in to Yandex. */
     private var lastServerReply = 0L
 
-    // Step 2: document.
+    // Step 2: transports and the Yandex document.
     var channel by mutableStateOf<NewChannel?>(null)
         private set
     var name by mutableStateOf("")
+    /** The carriers besides direct, which every channel has as the backup. */
+    var useVolga by mutableStateOf(true)
+    var useMailru by mutableStateOf(false)
+    var useCups by mutableStateOf(false)
+    var mailruInput by mutableStateOf("")
+    /** The cups.online rooms made for this channel, kept if the user goes back. */
+    private var cupsRooms = ""
     var documentInput by mutableStateOf("")
     var documentUrl by mutableStateOf("")
         private set
@@ -92,7 +103,8 @@ class NodeWizardModel(private val container: AppContainer, private val scope: Co
     private var yandexCookies = ""
     /** The document the sign-in created; another document gets none. */
     private var cookiesDocument = ""
-    val nodeSignedIn: Boolean get() = yandexCookies.isNotEmpty()
+    /** The node will get the Yandex sign-in: there is one and the channel has a Yandex document. */
+    val nodeSignedIn: Boolean get() = withCookies
     /** The Yandex page to show while the document is being made. */
     val documentPage get() = service.documentPage
 
@@ -101,6 +113,13 @@ class NodeWizardModel(private val container: AppContainer, private val scope: Co
         private set
     var sudoPassword by mutableStateOf("")
     val needsSudoPassword: Boolean get() = probe?.sudo == "password"
+    /** The server's core updater: one timer for every channel there. */
+    var autoUpdate by mutableStateOf(true)
+        private set
+    /** The carriers the plan was made for, primary first. */
+    var transports by mutableStateOf<List<NodeTransport>>(emptyList())
+        private set
+    val transportTypes: List<TransportType> get() = transports.mapNotNull { TransportType.fromCli(it.type) }
 
     // Step 4: verification and the result.
     var installed by mutableStateOf(false)
@@ -117,7 +136,7 @@ class NodeWizardModel(private val container: AppContainer, private val scope: Co
         private set
     var saved by mutableStateOf(false)
         private set
-    private var stopWaitingForYandex = false
+    private var stopWaitingForPrimary = false
 
     private var job: Job? = null
 
@@ -233,19 +252,62 @@ class NodeWizardModel(private val container: AppContainer, private val scope: Co
             if (!e.captcha) throw e
             "Яндекс попросил проверку у этого устройства, поэтому документ проверит сама нода при запуске."
         }
-        busy = "Спрашиваю сервер, что изменится…"
-        val withCookies = yandexCookies.isNotEmpty()
-        plan = onServer(retry = true) { service.plan(channel!!.id, withCookies) }
+        proceed()
+    }
+
+    /** Goes on to the plan once the Yandex document is ready or not chosen. */
+    fun next() {
+        launchCall("Готовлю транспорты канала…") { proceed() }
+    }
+
+    /**
+     * Gathers the chosen carriers (the Yandex document checked by now, the
+     * Mail.ru link, new cups.online rooms) and asks the server for the plan.
+     */
+    private suspend fun proceed() {
+        val chosen = mutableListOf<NodeTransport>()
+        if (useVolga) {
+            if (documentUrl.isEmpty()) throw NodeWizardException("Создайте документ Яндекса или вставьте ссылку на свой")
+            chosen += NodeTransport(TransportType.VYANDEX.cliName, documentUrl)
+        }
+        if (useMailru) {
+            val link = NodeTransports.cleanMailru(mailruInput)
+                ?: throw NodeWizardException("Нужна публичная ссылка Mail.ru вида https://cloud.mail.ru/public/…/…")
+            mailruInput = link
+            chosen += NodeTransport(TransportType.MAILRU.cliName, link)
+        }
+        if (useCups) {
+            if (cupsRooms.isEmpty()) {
+                busy = "Создаю комнаты cups.online…"
+                cupsRooms = service.createCupsRooms()
+            }
+            chosen += NodeTransport(TransportType.CUPSONLINE.cliName, cupsRooms)
+        }
+        transports = chosen
+        askPlan()
         if (needsSudoPassword && sudoPassword.isEmpty() && !useKey) sudoPassword = password
         step = WizardStep.Plan
+    }
+
+    /** The node gets the Yandex sign-in only for a Yandex document it has. */
+    private val withCookies: Boolean get() = yandexCookies.isNotEmpty() && transports.any { it.type == TransportType.VYANDEX.cliName }
+
+    private suspend fun askPlan() {
+        busy = "Спрашиваю сервер, что изменится…"
+        plan = onServer(retry = true) { service.plan(channel!!.id, transports, withCookies, autoUpdate) }
     }
 
     fun forgetYandexSignIn() {
         yandexCookies = ""
         // The plan lists the sign-in step; ask again without it.
-        launchCall("Спрашиваю сервер, что изменится…") {
-            plan = onServer(retry = true) { service.plan(channel!!.id, withCookies = false) }
-        }
+        launchCall("Спрашиваю сервер, что изменится…") { askPlan() }
+    }
+
+    fun changeAutoUpdate(on: Boolean) {
+        if (busy != null || on == autoUpdate) return
+        autoUpdate = on
+        // The plan lists what happens to the updater; ask again.
+        launchCall("Спрашиваю сервер, что изменится…") { askPlan() }
     }
 
     // ---- step 3: install ----
@@ -257,10 +319,11 @@ class NodeWizardModel(private val container: AppContainer, private val scope: Co
         launchCall("Устанавливаю ноду: скачиваю ядро, пишу конфигурацию, запускаю…", onFailure = { e ->
             if (e.sudo) { error = "sudo не принял пароль"; true } else false
         }) {
-            onServer { service.apply(channel, documentUrl, plan.port, sudoPassword, yandexCookies) }
+            val cookies = if (withCookies) yandexCookies else ""
+            onServer { service.apply(channel, transports, plan.port, autoUpdate, sudoPassword, cookies) }
             installed = true
             yandexCookies = ""
-            val link = service.shareLink(profileName(), documentUrl, channel.key, host.trim(), plan.port)
+            val link = service.shareLink(profileName(), channel.key, host.trim(), plan.port, transports)
             shareLink = link
             val candidate = Profile.fromShare(
                 container.shareCodec.decode(link), container.profiles.newId(), container.platform.now(), ProfileSource.Node,
@@ -287,8 +350,8 @@ class NodeWizardModel(private val container: AppContainer, private val scope: Co
     /**
      * Connects through the new node as a client and asks api.ipify.org
      * where the traffic leaves: it must be the server's address. Then waits
-     * for the Yandex carrier, which may first need the node's own check
-     * (the app-wide captcha dialog shows it).
+     * for the primary carrier, which for a Yandex document may first need
+     * the node's own check (the app-wide captcha dialog shows it).
      */
     fun verify() {
         val candidate = profile ?: return
@@ -300,7 +363,7 @@ class NodeWizardModel(private val container: AppContainer, private val scope: Co
         verifyFailed = null
         verifiedIp = ""
         primaryUp = false
-        stopWaitingForYandex = false
+        stopWaitingForPrimary = false
         if (settings.settings.value.mode != ConnectionMode.Client) {
             verifyFailed = "Проверка идёт в режиме клиента, а сейчас включён режим выходной ноды. Переключите режим на главной и повторите."
             return
@@ -315,7 +378,7 @@ class NodeWizardModel(private val container: AppContainer, private val scope: Co
             var started = false
             var lastProblem = ""
             while (verifiedIp.isEmpty()) {
-                if (stopWaitingForYandex) throw NodeWizardException("Проверка остановлена: нода пока не ответила")
+                if (stopWaitingForPrimary) throw NodeWizardException("Проверка остановлена: нода пока не ответила")
                 if (container.platform.now() > deadline) {
                     throw NodeWizardException(
                         if (lastProblem.isNotEmpty()) "Канал поднялся, но запрос через него не прошёл: $lastProblem"
@@ -355,14 +418,14 @@ class NodeWizardModel(private val container: AppContainer, private val scope: Co
                 if (verifiedIp.isEmpty()) delay(POLL_MS)
             }
             // Traffic may have gone through the direct backup. Give the
-            // Yandex carrier the rest of the time to come up: the node may
-            // first need its own check, which the app-wide captcha dialog shows.
-            busy = "Жду канал через Яндекс…"
-            while (!stopWaitingForYandex && container.platform.now() < deadline && !yandexUp()) {
+            // primary carrier the rest of the time to come up: a Yandex node
+            // may first need its own check, which the app-wide captcha dialog shows.
+            primaryType?.let { busy = "Жду канал через ${it.shortLabel}…" }
+            while (!stopWaitingForPrimary && container.platform.now() < deadline && !primaryLive()) {
                 if (connection.state.value.profile?.id != candidate.id) break
                 delay(POLL_MS)
             }
-            primaryUp = yandexUp()
+            primaryUp = primaryLive()
             step = WizardStep.Done
         } catch (e: CancellationException) {
             throw e
@@ -373,11 +436,17 @@ class NodeWizardModel(private val container: AppContainer, private val scope: Co
         }
     }
 
-    private fun yandexUp() = connection.traffic.value.activeTransport == TransportType.VYANDEX.cliName
+    /** The highest-priority carrier; null for a direct-only channel. */
+    val primaryType: TransportType? get() = transportTypes.firstOrNull()
 
-    /** Stops waiting for Yandex and keeps what was proven so far. */
+    private fun primaryLive(): Boolean {
+        val primary = primaryType ?: return true
+        return connection.traffic.value.activeTransport == primary.cliName
+    }
+
+    /** Stops waiting for the primary carrier and keeps what was proven so far. */
     fun stopWaiting() {
-        stopWaitingForYandex = true
+        stopWaitingForPrimary = true
     }
 
     fun skipVerification() {

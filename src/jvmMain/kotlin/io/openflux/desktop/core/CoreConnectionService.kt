@@ -21,6 +21,10 @@ import io.openflux.desktop.model.Profile
 import io.openflux.desktop.model.TrafficStats
 import io.openflux.desktop.model.isActive
 import io.openflux.desktop.platform.WindowsSystemProxy
+import io.openflux.desktop.data.CookieStoreSeeder
+import io.openflux.desktop.model.AccountKind
+import io.openflux.desktop.model.ProfileSource
+import io.openflux.desktop.service.Accounts
 import io.openflux.desktop.service.ConnectionService
 import io.openflux.desktop.service.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
@@ -32,6 +36,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
@@ -55,6 +60,7 @@ import java.util.concurrent.atomic.AtomicLong
 class CoreConnectionService(
     private val settings: SettingsRepository,
     private val binary: CoreBinary,
+    private val accounts: Accounts,
 ) : ConnectionService {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val isWindows = System.getProperty("os.name").lowercase().contains("win")
@@ -93,6 +99,8 @@ class CoreConnectionService(
         val elevated: Elevated? = null,
         val jobs: MutableList<Job> = mutableListOf(),
     ) {
+        /** The sign-ins handed to the exit this run, not to send the same twice. */
+        val pushed = java.util.concurrent.ConcurrentHashMap<AccountKind, Map<String, String>>()
         @Volatile var ipc: CoreIpc? = null
         @Volatile var stopping = false
         @Volatile var lastProblem: String? = null
@@ -127,6 +135,45 @@ class CoreConnectionService(
         scope.launch {
             settings.settings.distinctUntilChangedBy { it.systemProxy }.collect { applySystemProxy() }
         }
+        // A fresh sign-in (after it expired) goes on to your own node at once.
+        scope.launch {
+            accounts.sessions.drop(1).collect { sessions ->
+                val current = synchronized(lock) { run } ?: return@collect
+                if (_state.value !is ConnectionState.Connected || !ownsExit(current)) return@collect
+                for ((kind, session) in sessions) {
+                    if (!kind.opensSignedIn) continue
+                    if (session.expired || current.pushed[kind] == session.cookies) continue
+                    pushQuietly(current, kind)
+                }
+            }
+        }
+    }
+
+    /** Your own node (from the wizard): it may get your sign-in without asking. */
+    private fun ownsExit(run: Run) =
+        run.settings.mode == ConnectionMode.Client && run.usesIpc && run.profile.source == ProfileSource.Node &&
+            run.settings.useAccountSessions
+
+    private suspend fun pushQuietly(run: Run, kind: AccountKind) {
+        runCatching { pushTo(run, kind) }
+            .onFailure { log(LogLevel.Warning, "Не удалось передать вход ${kind.label} ноде: ${it.message}") }
+    }
+
+    override suspend fun pushAccountToExit(kind: AccountKind): Int {
+        val current = synchronized(lock) { run } ?: throw IllegalStateException("Нет подключения к ноде")
+        return pushTo(current, kind)
+    }
+
+    private fun pushTo(run: Run, kind: AccountKind): Int {
+        check(run.settings.mode == ConnectionMode.Client && run.usesIpc) { "Передать вход можно только ноде профиля Session" }
+        val ipc = run.ipc ?: throw IllegalStateException("Нет связи с ядром")
+        val session = accounts.validSession(kind) ?: throw IllegalStateException("Сначала войдите в ${kind.label}")
+        val names = run.profile.sessionSpecs().filter { AccountKind.of(it.type) == kind }.map { it.name }
+        check(names.isNotEmpty()) { "В профиле нет транспортов ${kind.label}" }
+        names.forEach { ipc.offerCookies(IpcCookiesOffer(it, session.cookies, remote = true)) }
+        run.pushed[kind] = session.cookies
+        log(LogLevel.Success, "Вход ${kind.label} передан ноде (${names.size} транспорт.)")
+        return names.size
     }
 
     override fun connect(profile: Profile) {
@@ -177,6 +224,9 @@ class CoreConnectionService(
                 ipcSocket = ipcSocket?.absolutePath,
             )
             val launch = CoreConfig.build(profile, current, paths)
+            if (current.useAccountSessions) {
+                CookieStoreSeeder.seed(File(paths.cookieStore), profile, accounts.sessions.value)
+            }
             if (launch.conf != null) {
                 confFile.writeText(launch.conf)
                 restrictToOwner(confFile)
@@ -373,6 +423,9 @@ class CoreConnectionService(
             if (first) log(LogLevel.Success, if (run.settings.mode == ConnectionMode.Exit) "Нода запущена" else "Подключено к ноде")
             applySystemProxy()
             if (run.settings.mode == ConnectionMode.Client) refreshExitAddress()
+            if (first && ownsExit(run)) scope.launch {
+                accounts.sessions.value.values.filter { !it.expired && it.kind.opensSignedIn }.forEach { pushQuietly(run, it.kind) }
+            }
         }
     }
 

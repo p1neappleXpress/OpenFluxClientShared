@@ -13,6 +13,14 @@ object YandexDisk {
     const val SIGN_IN = "Войдите в аккаунт Яндекса: документ создастся сам"
     const val SIGN_IN_TIMEOUT_MS = 15 * 60 * 1000L
 
+    /** The core's own (transport/yandex volgaUserAgent): Yandex ties a sign-in and a passed check to it. */
+    const val USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0"
+
+    /** Where a Yandex sign-in leaves its cookies; read them all to keep the whole login. */
+    val ACCOUNT_URLS = listOf(
+        "https://passport.yandex.ru/", "https://yandex.ru/", "https://disk.yandex.ru/", "https://docs.yandex.ru/",
+    )
+
     /**
      * The same calls the Disk web client makes: page data holds the CSRF
      * keys (sk for /models-v2, skExternal for /editnew). Returns JSON:
@@ -42,9 +50,12 @@ object YandexDisk {
     const path = '/disk/openflux/' + name + '.docx';
     let file = await info(path);
     if (!file) {
+      // Disk answers with a redirect to docs.yandex.ru, which creates the
+      // file; a readable (cors) fetch is refused there, so the request goes
+      // no-cors and the file is looked for on Disk below.
       const r = await fetch('/editnew/docx/disk/openflux?sk=' + encodeURIComponent(cfg.skExternal)
-        + '&filename=' + encodeURIComponent(name), {credentials: 'include'});
-      if (!r.ok) throw new Error('создание документа: ' + r.status);
+        + '&filename=' + encodeURIComponent(name), {credentials: 'include', mode: 'no-cors'});
+      if (r.type !== 'opaque' && !r.ok) throw new Error('создание документа: ' + r.status);
       for (let i = 0; i < 30 && !file; i++) { file = await info(path); if (!file) await new Promise(r => setTimeout(r, 500)); }
     }
     if (!file || !file.meta) throw new Error('документ не появился на Диске');

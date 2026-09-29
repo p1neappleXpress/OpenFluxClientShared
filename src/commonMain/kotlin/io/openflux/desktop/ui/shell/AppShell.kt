@@ -59,6 +59,8 @@ import io.openflux.desktop.ui.Shortcuts
 import io.openflux.desktop.ui.components.LocalToaster
 import io.openflux.desktop.ui.components.ToastHost
 import io.openflux.desktop.ui.components.Toaster
+import io.openflux.desktop.ui.accounts.AccountsTab
+import io.openflux.desktop.ui.accounts.SignInDialog
 import io.openflux.desktop.ui.home.HomeTab
 import io.openflux.desktop.ui.logs.LogsTab
 import io.openflux.desktop.ui.profiles.ProfilesTab
@@ -100,7 +102,10 @@ class ShellController {
 
 val LocalShell = staticCompositionLocalOf { ShellController() }
 
-val AppTabs: List<Tab> = listOf(HomeTab, ProfilesTab, LogsTab, SettingsTab)
+val AppTabs: List<Tab> = listOf(HomeTab, ProfilesTab, AccountsTab, LogsTab, SettingsTab)
+
+/** The tabs on show: Accounts only in developer mode. */
+fun visibleTabs(developerMode: Boolean): List<Tab> = if (developerMode) AppTabs else AppTabs - AccountsTab
 
 @Composable
 fun OpenFluxApp(container: AppContainer, scrollbars: Scrollbars, shortcuts: Shortcuts, browsers: BrowserViews = NoBrowserViews) {
@@ -150,10 +155,14 @@ private fun AppShell(shell: ShellController, toaster: Toaster) {
                     Key.Two -> 1
                     Key.Three -> 2
                     Key.Four -> 3
+                    Key.Five -> 4
                     else -> -1
                 }
                 when {
-                    index >= 0 -> { navigator.current = AppTabs[index]; true }
+                    index >= 0 -> {
+                        visibleTabs(settings.developerMode).getOrNull(index)?.let { navigator.current = it }
+                        true
+                    }
                     event.key == Key.Enter -> {
                         val state = container.connection.state.value
                         if (state.isActive) container.connection.disconnect() else HomeTab.connectSelected(container)
@@ -181,15 +190,18 @@ private fun AppShell(shell: ShellController, toaster: Toaster) {
                     Box(Modifier.fillMaxSize()) { navigator.saveableState("tab", tab) { tab.Content() } }
                 }
             }
+            val tabs = visibleTabs(settings.developerMode)
+            // Developer mode turned off while on Accounts: back to Settings.
+            LaunchedEffect(tabs) { if (navigator.current !in tabs) navigator.current = SettingsTab }
             if (shell.widthClass == WidthClass.Phone) {
                 Column(Modifier.fillMaxSize()) {
                     content(Modifier.weight(1f).fillMaxWidth())
-                    BottomBar(current = navigator.current, tabs = AppTabs, onSelect = { navigator.current = it })
+                    BottomBar(current = navigator.current, tabs = tabs, onSelect = { navigator.current = it })
                 }
             } else Row(Modifier.fillMaxSize()) {
                 Sidebar(
                     current = navigator.current,
-                    tabs = AppTabs,
+                    tabs = tabs,
                     collapsed = collapsed,
                     canExpand = shell.widthClass != WidthClass.Compact,
                     onSelect = { navigator.current = it },
@@ -202,6 +214,7 @@ private fun AppShell(shell: ShellController, toaster: Toaster) {
             val toastGap = if (shell.widthClass == WidthClass.Phone) AppTheme.dimens.bottomBarHeight + AppTheme.spacing.m else AppTheme.spacing.xxl
             ToastHost(toaster, Modifier.align(Alignment.BottomCenter).padding(bottom = toastGap, start = AppTheme.spacing.l, end = AppTheme.spacing.l))
             CaptchaDialog()
+            SignInDialog()
         }
     }
 }

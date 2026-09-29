@@ -145,6 +145,11 @@ fun AppSwitch(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, enabled: 
             uncheckedThumbColor = colors.textHint,
             uncheckedTrackColor = colors.surfaceTonal,
             uncheckedBorderColor = colors.border,
+            // On but locked (e.g. direct, always part of a node channel)
+            // must still read as on.
+            disabledCheckedThumbColor = Color.White,
+            disabledCheckedTrackColor = colors.accent.copy(alpha = 0.45f),
+            disabledCheckedBorderColor = colors.accent.copy(alpha = 0.45f),
         ),
     )
 }

@@ -97,7 +97,7 @@ class LogsScreenModel(private val container: AppContainer) : ScreenModel {
 
 object LogsTab : Tab {
     override val options: TabOptions
-        @Composable get() = TabOptions(index = 2u, title = "Логи", icon = painterResource(AppIcons.Terminal))
+        @Composable get() = TabOptions(index = 3u, title = "Логи", icon = painterResource(AppIcons.Terminal))
 
     @Composable
     override fun Content() {

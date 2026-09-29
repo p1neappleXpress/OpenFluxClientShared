@@ -1,5 +1,7 @@
 package io.openflux.desktop.ui.settings
 
+import io.openflux.desktop.ui.components.LocalToaster
+import androidx.compose.foundation.clickable
 import io.openflux.desktop.ui.PlatformBackHandler
 import io.openflux.desktop.model.profile
 import androidx.compose.animation.animateColorAsState
@@ -98,13 +100,45 @@ class SettingsScreenModel(val container: AppContainer) : ScreenModel {
     var mobileDetailOpen by mutableStateOf(false)
     var latestRelease by mutableStateOf<String?>(null)
     var checkingRelease by mutableStateOf(false)
+    /** Taps on the app version toward developer mode (see [tapVersion]). */
+    private var versionTaps = 0
+
+    /**
+     * A tap on the app version: the tenth turns developer mode on (it shows
+     * the Accounts tab), like an Android phone's build number. Returns what
+     * to tell the user, null for nothing.
+     */
+    fun tapVersion(): String? {
+        if (container.settings.settings.value.developerMode) return "Режим разработчика уже включён"
+        versionTaps++
+        val left = DEVELOPER_TAPS - versionTaps
+        return when {
+            left <= 0 -> {
+                versionTaps = 0
+                update { it.copy(developerMode = true) }
+                "Режим разработчика включён: появилась вкладка «Аккаунты»"
+            }
+            left <= 5 -> "Ещё $left ${taps(left)} до режима разработчика"
+            else -> null
+        }
+    }
+
+    private fun taps(n: Int) = when {
+        n % 10 == 1 && n % 100 != 11 -> "нажатие"
+        n % 10 in 2..4 && n % 100 !in 12..14 -> "нажатия"
+        else -> "нажатий"
+    }
 
     fun update(transform: (AppSettings) -> AppSettings) = container.settings.update(transform)
+
+    companion object {
+        const val DEVELOPER_TAPS = 10
+    }
 }
 
 object SettingsTab : Tab {
     override val options: TabOptions
-        @Composable get() = TabOptions(index = 3u, title = "Настройки", icon = painterResource(AppIcons.Settings))
+        @Composable get() = TabOptions(index = 4u, title = "Настройки", icon = painterResource(AppIcons.Settings))
 
     @Composable
     override fun Content() {
@@ -495,8 +529,17 @@ private fun InterfaceSettings(model: SettingsScreenModel) {
 private fun AboutSettings(model: SettingsScreenModel) {
     val platform = model.container.platform
     val scope = rememberCoroutineScope()
+    val toaster = LocalToaster.current
+    val settings by model.container.settings.settings.collectAsState()
     AppCard(padding = 0.dp) {
-        KeyValueRow("Версия приложения", platform.appVersion)
+        KeyValueRow(
+            "Версия приложения",
+            platform.appVersion,
+            // Ten taps: developer mode.
+            Modifier.clickable(remember { MutableInteractionSource() }, indication = null) {
+                model.tapVersion()?.let { toaster.show(it, Tone.Accent) }
+            },
+        )
         HorizontalRule()
         KeyValueRow("Ядро OpenFlux", platform.coreVersion)
         HorizontalRule()
@@ -508,6 +551,16 @@ private fun AboutSettings(model: SettingsScreenModel) {
                 else -> "не проверялось"
             },
         )
+    }
+    if (settings.developerMode) {
+        AppCard(padding = AppTheme.spacing.s) {
+            SwitchRow(
+                "Режим разработчика",
+                "Вкладка «Аккаунты»: вход в сервисы и автоматическое создание документов.",
+                checked = true,
+                onCheckedChange = { on -> model.update { it.copy(developerMode = on) } },
+            )
+        }
     }
     AppButton("Проверить обновления", {
         model.checkingRelease = true

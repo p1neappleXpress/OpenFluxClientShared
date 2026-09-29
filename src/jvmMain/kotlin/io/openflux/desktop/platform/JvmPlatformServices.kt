@@ -1,5 +1,6 @@
 package io.openflux.desktop.platform
 
+import io.openflux.desktop.data.CupsRooms
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
@@ -113,6 +114,8 @@ class JvmPlatformServices(
     }
 
     override fun now(): Long = System.currentTimeMillis()
+
+    override suspend fun newCupsRooms(): String = CupsRooms.create()
 
     override suspend fun latestRelease(): String? = withContext(Dispatchers.IO) {
         runCatching {

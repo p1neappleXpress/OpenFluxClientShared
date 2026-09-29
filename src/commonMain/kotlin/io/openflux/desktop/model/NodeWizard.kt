@@ -26,6 +26,8 @@ data class ServerProbe(
     /** root, nopasswd, password or none. */
     val sudo: String = "",
     val core: String = "",
+    /** The server's core updater (openflux-node-update.timer) is on. */
+    val autoupdate: Boolean = false,
     val channels: List<String> = emptyList(),
 )
 
@@ -43,6 +45,33 @@ data class NodePlan(
 /** A new channel's name on the server and its encryption key. */
 data class NewChannel(val id: String, val key: String) {
     override fun toString() = "NewChannel($id)"
+}
+
+/**
+ * One of a new channel's carriers besides direct, as the core's
+ * provision.ChannelTransport: [type] is the CLI name (vyandex, mailru,
+ * cupsonline), [url] the document link or cups.online's room list.
+ */
+@Serializable
+data class NodeTransport(val type: String, val url: String) {
+    override fun toString() = "NodeTransport($type)"
+}
+
+object NodeTransports {
+    /** What the wizard offers besides direct, in the node's priority order. */
+    val offered = listOf(TransportType.VYANDEX, TransportType.MAILRU, TransportType.CUPSONLINE)
+
+    private val MAILRU_URL = Regex("""^https://cloud\.mail\.ru/public/[A-Za-z0-9_-]{2,64}/[A-Za-z0-9_-]{2,128}$""")
+
+    /** A Mail.ru public document link without query, fragment or trailing slash; null if it is not one. */
+    fun cleanMailru(url: String): String? =
+        url.trim().replace(Regex("[?#].*$"), "").trimEnd('/').takeIf(MAILRU_URL::matches)
+
+    /** How the wizard names [types] for people, primary first: "Volga, Mail.ru и Direct". */
+    fun describe(types: List<TransportType>): String {
+        val names = (types + TransportType.DIRECT).map { it.shortLabel }
+        return if (names.size == 1) names[0] else names.dropLast(1).joinToString(", ") + " и " + names.last()
+    }
 }
 
 /** The channel's Yandex document and the sign-in the node may open it with. */
