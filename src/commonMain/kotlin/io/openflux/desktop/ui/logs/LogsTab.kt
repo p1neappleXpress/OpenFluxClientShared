@@ -65,8 +65,8 @@ enum class LogFilter(val label: String) { All("Все"), Important("Важные
 
 class LogsScreenModel(private val container: AppContainer) : ScreenModel {
     /** The core's own log and the node wizard's SSH/RPC trace, merged by time for one timeline. */
-    val logs = combine(container.connection.logs, container.nodeWizard.logs) { core, wizard ->
-        if (wizard.isEmpty()) core else (core + wizard).sortedWith(compareBy({ it.time }, { it.id }))
+    val logs = combine(container.connection.logs, container.nodeWizard.logs, container.phpHosting.logs) { core, wizard, hosting ->
+        if (wizard.isEmpty() && hosting.isEmpty()) core else (core + wizard + hosting).sortedWith(compareBy({ it.time }, { it.id }))
     }
     val settings = container.settings
     var query by mutableStateOf("")
@@ -90,6 +90,7 @@ class LogsScreenModel(private val container: AppContainer) : ScreenModel {
     fun clear() {
         container.connection.clearLogs()
         container.nodeWizard.clearLogs()
+        container.phpHosting.clearLogs()
     }
 
     fun setAutoScroll(on: Boolean) = settings.update { it.copy(logAutoScroll = on) }

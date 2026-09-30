@@ -32,6 +32,10 @@ object CoreConfig {
         val exit = settings.mode == ConnectionMode.Exit
         val socks = "$LOOPBACK:${settings.socksPort}"
         val http = "$LOOPBACK:${settings.socksPort + 1}"
+        if (profile.stream) {
+            require(!exit) { "Режим без сервера работает только как клиент: выхода в нём нет, сервер заменяет PHP-хостинг" }
+            return stream(profile, settings, paths, socks, http)
+        }
         return if (profile.session) session(profile, settings, paths, exit, socks, http) else classic(profile, settings, paths, exit, socks, http)
     }
 
@@ -96,6 +100,31 @@ object CoreConfig {
         }
         val proxies = !exit && !settings.fullTunnel
         return CoreLaunch(args, conf, if (proxies) socks else null, if (proxies) http else null, usesIpc = paths.ipcSocket != null)
+    }
+
+    /**
+     * The mode without a server: the core's `--mode=stream` (the stream mux over cups.online or a
+     * Mail.ru document to the PHP node), as proxies or, with the full tunnel, through the
+     * system's TUN. No key, no codec, no Session: nothing of those applies.
+     */
+    private fun stream(profile: Profile, settings: AppSettings, paths: CorePaths, socks: String, http: String): CoreLaunch {
+        val args = buildList {
+            add("--role=client")
+            add("--mode=stream")
+            if (settings.fullTunnel) {
+                add("--inbound=tun")
+            } else {
+                add("--socks5=$socks")
+                add("--http-proxy=$http")
+            }
+            add("--transport=${profile.transport.cliName}")
+            add("--url=${profile.value.trim()}")
+            // Traffic totals for the speed counters (proxy mode; the log says when it is up).
+            if (paths.ipcSocket != null && !settings.fullTunnel) add("--ipc-socket=${paths.ipcSocket}")
+            if (settings.debugLevel > 0) add("--debug=${settings.debugLevel}")
+        }
+        return if (settings.fullTunnel) CoreLaunch(args, null, null, null, usesIpc = false)
+        else CoreLaunch(args, null, socks, http, usesIpc = false)
     }
 
     private fun classic(profile: Profile, settings: AppSettings, paths: CorePaths, exit: Boolean, socks: String, http: String): CoreLaunch {

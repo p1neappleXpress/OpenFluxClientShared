@@ -41,17 +41,34 @@ data class Profile(
     val extras: List<ExtraTransport> = emptyList(),
     val source: ProfileSource = ProfileSource.Manual,
     val createdAt: Long = 0,
+    /**
+     * The mode without a server: the exit is a PHP node on an ordinary web host, reached over
+     * cups.online ([transport] CUPSONLINE, [value] the room's address) or a Mail.ru document
+     * (MAILRU, [value] its link). No key, no Session, TCP only. Profiles saved before this
+     * existed read as false.
+     */
+    val stream: Boolean = false,
+    /** Where this profile's node lives, to start it again; null when it was made without the wizard. */
+    val phpNode: PhpNodeRef? = null,
 ) {
     /** Every carrier of the profile, main first. */
     val carriers: List<ExtraTransport>
         get() = listOf(ExtraTransport(transport, value, uid, priority)) + if (session) extras else emptyList()
 
     val summary: String
-        get() = if (session) carriers.joinToString(" + ") { it.type.shortLabel } else transport.label
+        get() = when {
+            stream -> "Без сервера · ${transport.shortLabel}"
+            session -> carriers.joinToString(" + ") { it.type.shortLabel }
+            else -> transport.label
+        }
 
     /** Problems that keep the profile from connecting, empty when it can. */
     fun problems(): List<String> = buildList {
         if (name.isBlank()) add("Укажите название")
+        if (stream) {
+            streamProblem()?.let { add(it) }
+            return@buildList
+        }
         carriers.forEachIndexed { index, carrier ->
             val where = if (index == 0) "Основной транспорт" else "Транспорт ${index + 1}"
             carrierProblem(carrier)?.let { add("$where: $it") }
@@ -59,6 +76,19 @@ data class Profile(
         if (session && secret.length < MIN_SECRET) add("Для режима Session нужен ключ не короче $MIN_SECRET символов")
         if (!session && secret.isNotEmpty() && secret.length < MIN_SECRET) add("Ключ должен быть не короче $MIN_SECRET символов")
         if (!session && transport.sessionOnly) add("${transport.label} работает только в режиме Session")
+    }
+
+    /** What keeps a stream-mode profile from connecting, null when nothing does. */
+    private fun streamProblem(): String? {
+        val v = value.trim()
+        return when {
+            session || secret.isNotEmpty() -> "В режиме без сервера нет ключа и режима Session"
+            transport == TransportType.CUPSONLINE ->
+                if (PhpHosts.cupsRoom(v) == null) "Нужен адрес комнаты cups.online (https://interview.cups.online/live-coding/?room=…)" else null
+            transport == TransportType.MAILRU ->
+                if (NodeTransports.cleanMailru(v) == null) "Нужна публичная ссылка на документ Mail.ru (https://cloud.mail.ru/public/…)" else null
+            else -> "Режим без сервера работает через cups.online или Mail.ru"
+        }
     }
 
     /**
@@ -83,6 +113,15 @@ data class Profile(
 
     /** The link another device scans; null with why when it cannot be shared. */
     fun toShare(): Result<ShareConfig> = runCatching {
+        if (stream) {
+            streamProblem()?.let { throw IllegalArgumentException(it) }
+            // The node's token stays out: a link is for a device that only needs to connect.
+            return@runCatching ShareConfig(
+                name = name,
+                mode = ShareConfig.MODE_STREAM,
+                transports = listOf(ShareTransport(type = transport.cliName, url = value.trim())),
+            )
+        }
         require(transport.shareable) { "${transport.label} нельзя передать ссылкой: токен привязан к аккаунту" }
         val transports = carriers.filter { it.type.shareable }.map {
             ShareTransport(
@@ -136,6 +175,20 @@ data class Profile(
          * non-direct transport becomes the main one, the rest Session extras.
          */
         fun fromShare(config: ShareConfig, id: String, now: Long, source: ProfileSource): Profile {
+            if (config.isStream) {
+                val only = config.transports.singleOrNull()
+                    ?: throw IllegalArgumentException("В режиме без сервера нужен ровно один транспорт")
+                return Profile(
+                    id = id,
+                    name = config.name.ifBlank { "Без сервера" },
+                    transport = TransportType.fromCli(only.type)
+                        ?: throw IllegalArgumentException("Неизвестный транспорт ${only.type}"),
+                    value = only.url,
+                    stream = true,
+                    source = source,
+                    createdAt = now,
+                )
+            }
             val sorted = config.transports.sortedByDescending { it.priority }
             val main = sorted.firstOrNull { it.type != TransportType.DIRECT.cliName } ?: sorted.first()
             fun value(t: ShareTransport) = if (t.type == TransportType.DIRECT.cliName) t.dial else t.url
