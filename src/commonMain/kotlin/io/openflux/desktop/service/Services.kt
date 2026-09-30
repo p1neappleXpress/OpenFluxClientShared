@@ -163,6 +163,8 @@ class AppContainer(
     val platform: PlatformServices,
     val shareCodec: ShareLinkCodec,
     val nodeWizard: NodeWizardService,
+    /** The "без сервера" wizard's steps: a PHP node on an ordinary web host, put there over FTP by the core. */
+    val phpHosting: PhpHostingService = PhpHostingService(),
 ) {
     /** An `openflux://` link opened from outside (a scanned code, a chat); the Profiles screen imports it. */
     val incomingLink = MutableStateFlow<String?>(null)

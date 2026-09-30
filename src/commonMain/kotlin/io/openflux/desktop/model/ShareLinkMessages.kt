@@ -11,6 +11,7 @@ object ShareLinkMessages {
         "not_link", "unsupported_version", "case_changed", "damaged", "too_large", "bad_payload", "bad_config",
         "no_transports", "several_need_session", "session_secret", "short_secret", "unknown_codec",
         "not_shareable", "unknown_transport", "direct_no_dial", "direct_needs_session",
+        "unknown_mode", "stream_transport", "stream_one_transport", "stream_plain_only",
     )
 
     fun text(code: String, param: String = "", detail: String = ""): String = when (code) {
@@ -30,6 +31,10 @@ object ShareLinkMessages {
         "unknown_transport" -> "Неизвестный транспорт «$param»: возможно, нужно обновить OpenFlux"
         "direct_no_dial" -> "У direct нет адреса ноды"
         "direct_needs_session" -> "Direct работает только в режиме Session"
+        "unknown_mode" -> "Ссылка для режима «$param», которого это приложение не знает: обновите OpenFlux"
+        "stream_transport" -> "Режим без сервера работает через cups.online или Mail.ru, а не через ${TransportType.fromCli(param)?.label ?: param}"
+        "stream_one_transport" -> "В режиме без сервера нужен ровно один транспорт"
+        "stream_plain_only" -> "В режиме без сервера нет ключа и режима Session"
         else -> if (detail.isNotBlank()) "Не удалось обработать ссылку: $detail" else "Не удалось обработать ссылку"
     }
 }

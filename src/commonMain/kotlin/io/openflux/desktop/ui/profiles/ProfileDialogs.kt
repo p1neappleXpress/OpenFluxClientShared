@@ -137,12 +137,23 @@ fun ImportDialog(model: ProfilesScreenModel) {
             val config = ready.config
             AppCard(padding = 0.dp) {
                 KeyValueRow("Название", config.name.ifBlank { "OpenFlux" })
-                KeyValueRow("Режим", if (config.negotiate) "Session" else "Обычный")
+                KeyValueRow("Режим", when {
+                    config.isStream -> "Без сервера (нода на PHP-хостинге)"
+                    config.negotiate -> "Session"
+                    else -> "Обычный"
+                })
                 KeyValueRow("Транспорты", config.transports.joinToString(" + ") { TransportType.fromCli(it.type)?.shortLabel ?: it.type })
                 KeyValueRow("Ключ шифрования", if (config.secret.isNotEmpty()) "есть" else "нет")
             }
             Spacer(Modifier.height(AppTheme.spacing.s))
-            Banner("В ссылке ключ шифрования ноды: добавляйте ссылки только от тех, кому доверяете.", Tone.Neutral, icon = Icons.Rounded.Lock)
+            Banner(
+                if (config.isStream) {
+                    "Ключей в ссылке нет: трафик пойдёт через чужой хостинг, который видит, куда вы заходите. Добавляйте ссылки только от тех, кому доверяете."
+                } else {
+                    "В ссылке ключ шифрования ноды: добавляйте ссылки только от тех, кому доверяете."
+                },
+                Tone.Neutral, icon = Icons.Rounded.Lock,
+            )
         }
     }
 }
@@ -174,7 +185,11 @@ fun ShareDialog(model: ProfilesScreenModel, profile: Profile) {
                     Text("Отсканируйте в OpenFlux на другом устройстве (Профили → Импорт) или вставьте ссылку в OpenFlux на компьютере.",
                         style = AppTheme.typography.body, color = AppTheme.colors.textSecondary)
                     Spacer(Modifier.height(AppTheme.spacing.m))
-                    Banner("В коде ключ шифрования: передавайте только тому, кто будет пользоваться каналом.", Tone.Warning, icon = Icons.Rounded.Lock)
+                    Banner(
+                        if (profile.stream) "В коде нет ключей, но любой с ним сможет выходить в интернет через ваш хостинг: передавайте только тем, кому доверяете."
+                        else "В коде ключ шифрования: передавайте только тому, кто будет пользоваться каналом.",
+                        Tone.Warning, icon = Icons.Rounded.Lock,
+                    )
                 }
                 // The code beside its hint when there is room, above it on a phone.
                 BoxWithConstraints(Modifier.fillMaxWidth()) {

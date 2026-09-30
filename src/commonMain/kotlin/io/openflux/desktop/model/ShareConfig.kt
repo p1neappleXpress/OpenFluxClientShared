@@ -17,8 +17,16 @@ data class ShareConfig(
     val codec: String = "",
     val secret: String = "",
     val context: String = "",
+    /** "" is the classic tunnel; "stream" is the mode without a server (a PHP node on a web host). */
+    val mode: String = "",
     @EncodeDefault val transports: List<ShareTransport> = emptyList(),
-)
+) {
+    val isStream: Boolean get() = mode == MODE_STREAM
+
+    companion object {
+        const val MODE_STREAM = "stream"
+    }
+}
 
 @Serializable
 data class ShareTransport(

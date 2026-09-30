@@ -31,6 +31,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Delete
@@ -96,6 +97,7 @@ import io.openflux.desktop.ui.components.StatusBadge
 import io.openflux.desktop.ui.components.Tone
 import io.openflux.desktop.ui.look
 import io.openflux.desktop.ui.node.NodeWizardPane
+import io.openflux.desktop.ui.node.PhpWizardPane
 import io.openflux.desktop.ui.shell.LocalShell
 import io.openflux.desktop.ui.theme.AppTheme
 import org.jetbrains.compose.resources.painterResource
@@ -137,7 +139,7 @@ private fun ProfilesScreen(model: ProfilesScreenModel) {
     }
     DisposableEffect(model) {
         val unregister = shortcuts.register { event ->
-            if (event.type != KeyEventType.KeyDown || model.wizard != null) return@register false
+            if (event.type != KeyEventType.KeyDown || model.wizard != null || model.phpWizard != null) return@register false
             when {
                 event.isCtrlPressed && event.key == Key.N -> { model.startNew(); true }
                 event.isCtrlPressed && event.key == Key.I -> { model.importOpen = true; true }
@@ -154,6 +156,10 @@ private fun ProfilesScreen(model: ProfilesScreenModel) {
 
     model.wizard?.let { wizard ->
         NodeWizardPane(wizard, onClose = { model.closeWizard() }, onSaved = { model.closeWizard(it) })
+        return
+    }
+    model.phpWizard?.let { wizard ->
+        PhpWizardPane(wizard, onClose = { model.closePhpWizard() }, onSaved = { model.closePhpWizard(it) })
         return
     }
 
@@ -191,7 +197,7 @@ private fun ProfilesScreen(model: ProfilesScreenModel) {
                         EmptyState(
                             title = if (profiles.isEmpty()) "Профилей пока нет" else "Выберите профиль",
                             message = if (profiles.isEmpty()) {
-                                "Импортируйте ссылку openflux:// или QR-код от владельца ноды, создайте профиль вручную или поставьте свою ноду на VDS."
+                                "Импортируйте ссылку openflux:// или QR-код от владельца ноды, создайте профиль вручную, поставьте свою ноду на VDS или без сервера: на любом PHP-хостинге."
                             } else {
                                 if (touch) "Подробности появятся здесь. Долгое нажатие на профиль открывает меню."
                                 else "Подробности появятся здесь. Двойной щелчок по профилю подключает его, правый — открывает меню."
@@ -202,6 +208,7 @@ private fun ProfilesScreen(model: ProfilesScreenModel) {
                                 AppButton("Импорт", { model.importOpen = true }, leading = Icons.Rounded.ContentPaste)
                                 AppButton("Создать", model::startNew, style = ButtonStyle.Secondary)
                                 AppButton("Своя нода", model::openWizard, style = ButtonStyle.Secondary, leading = Icons.Rounded.Dns)
+                                AppButton("Без сервера", model::openPhpWizard, style = ButtonStyle.Secondary, leading = Icons.Rounded.Cloud)
                             }
                         }
                     }
@@ -231,6 +238,7 @@ private fun ProfileListPane(model: ProfilesScreenModel, profiles: List<Profile>,
                     MenuAction("Создать вручную", model::startNew, Icons.Rounded.Edit, shortcut = "Ctrl+N"),
                     MenuAction("Импорт ссылки или QR", { model.importOpen = true }, Icons.Rounded.ContentPaste, shortcut = "Ctrl+I"),
                     MenuAction("Создать свою ноду на VDS", model::openWizard, Icons.Rounded.Dns),
+                    MenuAction("Без сервера: нода на PHP-хостинге", model::openPhpWizard, Icons.Rounded.Cloud),
                 ))
             }
         }
@@ -423,15 +431,50 @@ private fun ProfileDetails(model: ProfilesScreenModel, profile: Profile, state: 
             SectionLabel("Параметры")
             Spacer(Modifier.height(AppTheme.spacing.s))
             AppCard(padding = 0.dp) {
-                KeyValueRow("Режим", if (profile.session) "Session (несколько транспортов)" else "Обычный")
-                HorizontalRule()
-                KeyValueRow("Шифрование", if (profile.secret.isNotEmpty()) "AES-256-GCM, ключ ${profile.secret.length} симв." else "Без ключа")
-                if (!profile.session) {
+                if (profile.stream) {
+                    KeyValueRow("Режим", "Без сервера: нода на PHP-хостинге")
                     HorizontalRule()
-                    KeyValueRow("Кодек", profile.codec.label)
+                    KeyValueRow("Шифрование", "Без ключа: содержимое защищает TLS самих приложений")
+                } else {
+                    KeyValueRow("Режим", if (profile.session) "Session (несколько транспортов)" else "Обычный")
+                    HorizontalRule()
+                    KeyValueRow("Шифрование", if (profile.secret.isNotEmpty()) "AES-256-GCM, ключ ${profile.secret.length} симв." else "Без ключа")
+                    if (!profile.session) {
+                        HorizontalRule()
+                        KeyValueRow("Кодек", profile.codec.label)
+                    }
                 }
                 HorizontalRule()
                 KeyValueRow("Источник", profile.source.label)
+            }
+            profile.phpNode?.let { node ->
+                Spacer(Modifier.height(AppTheme.spacing.xl))
+                SectionLabel("Нода на хостинге")
+                Spacer(Modifier.height(AppTheme.spacing.s))
+                AppCard(padding = 0.dp) {
+                    KeyValueRow("Сайт", node.siteUrl) {
+                        AppIconButton("Копировать", {
+                            model.copy(node.siteUrl)
+                            toaster.show("Скопировано")
+                        }, icon = Icons.Rounded.ContentCopy)
+                    }
+                }
+                Spacer(Modifier.height(AppTheme.spacing.m))
+                ButtonRow {
+                    AppButton(if (model.nodeBusy) "Подождите…" else "Запустить ноду", { model.startNode(profile) },
+                        style = ButtonStyle.Secondary, leading = Icons.Rounded.PlayArrow, enabled = !model.nodeBusy)
+                    AppButton("Остановить ноду", { model.stopNode(profile) }, style = ButtonStyle.Ghost,
+                        leading = Icons.Rounded.Stop, enabled = !model.nodeBusy)
+                }
+                model.nodeMessage?.let {
+                    Spacer(Modifier.height(AppTheme.spacing.s))
+                    Text(it, style = AppTheme.typography.bodySmall, color = AppTheme.colors.textSecondary)
+                }
+                Spacer(Modifier.height(AppTheme.spacing.s))
+                Text(
+                    "Нода запускается сама, когда вы подключаетесь и хостинг доступен напрямую. Кнопки нужны, если что-то пошло не так.",
+                    style = AppTheme.typography.caption, color = AppTheme.colors.textHint,
+                )
             }
             val problems = profile.problems()
             if (problems.isNotEmpty()) {

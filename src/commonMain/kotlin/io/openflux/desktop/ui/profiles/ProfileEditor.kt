@@ -48,6 +48,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import io.openflux.desktop.model.Codec
 import io.openflux.desktop.model.ExtraTransport
+import io.openflux.desktop.model.NodeTransports
+import io.openflux.desktop.model.PhpHosts
 import io.openflux.desktop.model.Profile
 import io.openflux.desktop.model.TransportType
 import io.openflux.desktop.model.ValueKind
@@ -71,6 +73,9 @@ import io.openflux.desktop.ui.components.Tone
 import io.openflux.desktop.ui.components.appClickable
 import io.openflux.desktop.ui.theme.AppTheme
 import org.jetbrains.compose.resources.painterResource
+
+/** How a profile connects: one carrier, several at once, or a PHP node on a web hosting. */
+private enum class EditMode(val label: String) { Classic("Обычный"), Session("Session"), Stream("Без сервера") }
 
 /** Creates or changes a profile; Ctrl+S saves, Esc cancels. */
 @Composable
@@ -130,23 +135,41 @@ fun ProfileEditor(model: ProfilesScreenModel, state: EditorState, onBack: (() ->
                     SectionLabel("Режим")
                     Spacer(Modifier.height(AppTheme.spacing.s))
                     Segmented(
-                        options = listOf(false, true),
-                        selected = draft.session,
-                        label = { if (it) "Session" else "Обычный" },
-                        onSelect = { session ->
+                        options = EditMode.entries,
+                        selected = when {
+                            draft.stream -> EditMode.Stream
+                            draft.session -> EditMode.Session
+                            else -> EditMode.Classic
+                        },
+                        label = { it.label },
+                        onSelect = { mode ->
                             model.updateDraft {
-                                val transport = if (!session && it.transport.sessionOnly) TransportType.VYANDEX else it.transport
-                                it.copy(session = session, transport = transport)
+                                val transport = when {
+                                    mode == EditMode.Stream && it.transport !in PhpHosts.carriers -> TransportType.CUPSONLINE
+                                    mode != EditMode.Session && mode != EditMode.Stream && it.transport.sessionOnly -> TransportType.VYANDEX
+                                    else -> it.transport
+                                }
+                                it.copy(
+                                    session = mode == EditMode.Session,
+                                    stream = mode == EditMode.Stream,
+                                    transport = transport,
+                                    // A node on a hosting has no key: nothing of it may linger from the other modes.
+                                    secret = if (mode == EditMode.Stream) "" else it.secret,
+                                    context = if (mode == EditMode.Stream) "" else it.context,
+                                    extras = if (mode == EditMode.Session) it.extras else emptyList(),
+                                )
                             }
                         },
-                        modifier = Modifier.fillUpTo(320.dp),
+                        modifier = Modifier.fillUpTo(520.dp),
                     )
                     Spacer(Modifier.height(AppTheme.spacing.xs))
                     Text(
-                        if (draft.session) {
-                            "Несколько транспортов одновременно с переключением по приоритету, согласованный ключ. Нода должна работать в режиме Session."
-                        } else {
-                            "Один транспорт, как у нод со старой настройкой."
+                        when {
+                            draft.stream ->
+                                "Выход на PHP-хостинге вместо своего сервера: без ключа, через cups.online или Mail.ru. Проще всего создать мастером («Без сервера»)."
+                            draft.session ->
+                                "Несколько транспортов одновременно с переключением по приоритету, согласованный ключ. Нода должна работать в режиме Session."
+                            else -> "Один транспорт, как у нод со старой настройкой."
                         },
                         style = AppTheme.typography.bodySmall,
                         color = AppTheme.colors.textSecondary,
@@ -160,9 +183,10 @@ fun ProfileEditor(model: ProfilesScreenModel, state: EditorState, onBack: (() ->
                         carrier = ExtraTransport(draft.transport, draft.value, draft.uid, draft.priority),
                         session = draft.session,
                         showPriority = draft.session,
+                        stream = draft.stream,
                         onChange = { c -> model.updateDraft { it.copy(transport = c.type, value = c.value, uid = c.uid, priority = c.priority) } },
                     )
-                    if (!draft.session) {
+                    if (!draft.session && !draft.stream) {
                         Spacer(Modifier.height(AppTheme.spacing.l))
                         Text("Кодек", style = AppTheme.typography.bodySmall, color = AppTheme.colors.textSecondary)
                         Spacer(Modifier.height(6.dp))
@@ -194,7 +218,7 @@ fun ProfileEditor(model: ProfilesScreenModel, state: EditorState, onBack: (() ->
                     }
                 }
 
-                Column {
+                if (!draft.stream) Column {
                     AppTextField(
                         value = draft.secret,
                         onValueChange = { v -> model.updateDraft { it.copy(secret = v.trim()) } },
@@ -224,21 +248,33 @@ fun ProfileEditor(model: ProfilesScreenModel, state: EditorState, onBack: (() ->
 }
 
 @Composable
-private fun CarrierFields(carrier: ExtraTransport, session: Boolean, showPriority: Boolean, onChange: (ExtraTransport) -> Unit) {
+private fun CarrierFields(carrier: ExtraTransport, session: Boolean, showPriority: Boolean, stream: Boolean = false, onChange: (ExtraTransport) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(AppTheme.spacing.m)) {
-        TransportDropdown(carrier.type, session) { onChange(carrier.copy(type = it)) }
+        TransportDropdown(carrier.type, session, stream) { onChange(carrier.copy(type = it)) }
         Row(horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.m)) {
             AppTextField(
                 value = carrier.value,
                 onValueChange = { onChange(carrier.copy(value = it.trim())) },
                 label = when (carrier.type.kind) {
-                    ValueKind.DocumentUrl -> if (carrier.type == TransportType.CUPSONLINE) "Код комнат" else "Ссылка на документ"
+                    ValueKind.DocumentUrl -> when {
+                        stream && carrier.type == TransportType.CUPSONLINE -> "Адрес комнаты cups.online"
+                        carrier.type == TransportType.CUPSONLINE -> "Код комнат"
+                        else -> "Ссылка на документ"
+                    }
                     ValueKind.Address -> "Адрес ноды"
                     ValueKind.Token -> "Токен MAX Web"
                 },
                 placeholder = carrier.type.valueHint,
                 secret = carrier.type.kind == ValueKind.Token,
-                error = if (carrier.value.isNotBlank()) Profile.carrierProblem(carrier)?.takeIf { carrier.type.kind != ValueKind.Token } else null,
+                error = if (carrier.value.isNotBlank()) {
+                    when {
+                        stream && carrier.type == TransportType.CUPSONLINE ->
+                            if (PhpHosts.cupsRoom(carrier.value) == null) "Нужен адрес комнаты (https://interview.cups.online/live-coding/?room=…)" else null
+                        stream && carrier.type == TransportType.MAILRU ->
+                            if (NodeTransports.cleanMailru(carrier.value) == null) "Нужна публичная ссылка на документ Mail.ru" else null
+                        else -> Profile.carrierProblem(carrier)?.takeIf { carrier.type.kind != ValueKind.Token }
+                    }
+                } else null,
                 modifier = Modifier.weight(1f),
             )
             if (showPriority) {
@@ -258,7 +294,7 @@ private fun CarrierFields(carrier: ExtraTransport, session: Boolean, showPriorit
 }
 
 @Composable
-private fun TransportDropdown(selected: TransportType, session: Boolean, onSelect: (TransportType) -> Unit) {
+private fun TransportDropdown(selected: TransportType, session: Boolean, stream: Boolean, onSelect: (TransportType) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -279,7 +315,7 @@ private fun TransportDropdown(selected: TransportType, session: Boolean, onSelec
             Text(selected.label, style = AppTheme.typography.body, color = AppTheme.colors.text, modifier = Modifier.weight(1f))
             Icon(Icons.Rounded.ExpandMore, "Выбрать транспорт", tint = AppTheme.colors.textSecondary)
         }
-        AppMenu(open, { open = false }, TransportType.entries.filter { session || !it.sessionOnly }.map { type ->
+        AppMenu(open, { open = false }, TransportType.entries.filter { if (stream) it in PhpHosts.carriers else session || !it.sessionOnly }.map { type ->
             MenuAction(type.label, { onSelect(type) })
         })
     }
