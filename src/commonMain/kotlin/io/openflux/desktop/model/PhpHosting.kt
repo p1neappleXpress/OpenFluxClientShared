@@ -45,6 +45,8 @@ data class PhpInstalled(
     val bytes: Long = 0,
     val security: String = "",
     @SerialName("token_reused") val tokenReused: Boolean = false,
+    /** Optional files the host would not take (the page's link parser): the node runs without them. */
+    val skipped: List<String> = emptyList(),
 )
 
 /** An upload's progress (phphost.Progress). */
@@ -56,6 +58,8 @@ data class PhpProgress(
     val of: Int = 0,
     @SerialName("bytes_done") val bytesDone: Long = 0,
     @SerialName("bytes_total") val bytesTotal: Long = 0,
+    /** For "retry" and "skipped": what went wrong, in the core's own (technical) words. */
+    val note: String = "",
 ) {
     /** 0..1 over all the bytes. */
     val fraction: Float get() = if (bytesTotal <= 0) 0f else (bytesDone.toFloat() / bytesTotal).coerceIn(0f, 1f)
@@ -72,14 +76,22 @@ data class PhpStatus(
     val parser: Boolean = false,
 )
 
-/** Whether the node is running (phphost.NodeState). */
+/** Whether the node is running, and which of its generations serves now (phphost.NodeState). */
 @Serializable
 data class PhpNodeState(
     val running: Boolean = false,
+    /** Earlier generations still finishing their connections after a handover. */
     val draining: Int = 0,
     val chain: Boolean = false,
     val stopping: Boolean = false,
+    /** Seconds until the serving generation hands over to the next (continuous mode). */
+    @SerialName("next_in") val nextIn: Int? = null,
+    val state: PhpNodeInfo = PhpNodeInfo(),
 )
+
+/** The serving (or last) generation as the node reports it. */
+@Serializable
+data class PhpNodeInfo(val gen: Int = 0, val phase: String = "", val reason: String = "")
 
 /** A cups.online room made for the node: its uuid and the address clients and the node take. */
 @Serializable
@@ -113,7 +125,11 @@ object PhpMessages {
     )
 
     fun text(code: String, param: String = "", detail: String = ""): String = when (code) {
-        "bad_params" -> if (param == "host/user/password") "Укажите адрес FTP-сервера, логин и пароль" else "Проверьте введённые данные"
+        "bad_params" -> when (param) {
+            "host/user/password" -> "Укажите адрес FTP-сервера, логин и пароль"
+            "token" -> TOKEN_SHAPE
+            else -> "Проверьте введённые данные"
+        }
         "ftp_connect" -> "Не удалось подключиться к FTP-серверу${if (param.isNotBlank()) " $param" else ""}: проверьте адрес и порт, " +
             "что хостинг пускает FTP из вашей сети и что это FTP или FTPS, а не SFTP (SSH)"
         "ftp_login" -> "FTP не принял логин или пароль. Пароль FTP на хостинге часто не совпадает с паролем от личного кабинета"
@@ -128,9 +144,28 @@ object PhpMessages {
             "Откройте адрес ноды в браузере и повторите"
         "site_not_phpbox" -> "Сайт отвечает, но это не нода: проверьте адрес сайта, папку, в которую залиты файлы, и что на хостинге включён PHP"
         "site_token" -> "Нода не приняла ключ доступа: на хостинге лежат файлы от другой установки. Установите заново"
+        // The app's own reason: a key the user typed for a node already on the hosting did not fit.
+        "site_token_given" -> "Нода не приняла этот ключ доступа. Ключ стоит в адресе страницы ноды после «k=» " +
+            "и в файле config.php на хостинге (PHPBOX_TOKEN)"
         "php_missing" -> "На этом хостинге отключены PHP-функции, без которых нода не работает: $param"
         "node_not_started" -> "Нода не запустилась за отведённое время. Откройте адрес ноды в браузере: там виден её журнал"
         else -> if (detail.isNotBlank()) "Ошибка установки на хостинг: $detail" else "Ошибка установки на хостинг"
+    }
+
+    const val TOKEN_SHAPE = "Свой ключ доступа: от 8 до 64 знаков — латинские буквы, цифры, «-» и «_»"
+
+    /** The node's state in a line: running and which generation, or stopped. */
+    fun nodeStatus(s: PhpNodeState): String = buildString {
+        if (!s.running) {
+            append(if (s.stopping) "останавливается" else "остановлена")
+            return@buildString
+        }
+        append(if (s.state.phase == "connecting") "подключается" else "работает")
+        if (s.state.gen > 0) append(" · поколение ${s.state.gen}")
+        val next = s.nextIn
+        if (s.chain && next != null) append(" · смена через $next с")
+        if (s.draining > 0) append(" · предыдущее дорабатывает соединения")
+        if (s.stopping) append(" · останавливается")
     }
 
     /** What the user should know about how the FTP password travelled. */
@@ -206,4 +241,62 @@ object PhpHosts {
 
     /** The carriers the PHP node has a port for, as the wizard offers them. */
     val carriers = listOf(TransportType.CUPSONLINE, TransportType.MAILRU)
+
+    /**
+     * What the address of a node's page tells, when the user pastes it instead of a bare site:
+     * `https://site/mailruexit.php?k=KEY&url=DOC` or `https://site/cupsexit.php?k=KEY&room=UUID`.
+     * [token], [carrier] and [target] are empty or null when the address does not carry them.
+     */
+    data class NodeAddress(val site: String, val token: String, val carrier: TransportType?, val target: String)
+
+    /** The parts of a node page's address; null when [input] is not an address of a site at all. */
+    fun nodeAddress(input: String): NodeAddress? {
+        val s = input.trim()
+        val site = siteUrl(s) ?: return null
+        val path = s.substringAfter("://").substringAfter('/', "").substringBefore('?').substringBefore('#').lowercase()
+        val query = s.substringAfter('?', "").substringBefore('#')
+        val params = query.split('&').filter { '=' in it }.associate { it.substringBefore('=') to percentDecode(it.substringAfter('=')) }
+        val carrier = when {
+            path.endsWith("cupsexit.php") -> TransportType.CUPSONLINE
+            path.endsWith("mailruexit.php") -> TransportType.MAILRU
+            else -> null
+        }
+        val target = when (carrier) {
+            TransportType.CUPSONLINE -> cupsRoom(params["room"].orEmpty()) ?: cupsRoom(params["url"].orEmpty()).orEmpty()
+            TransportType.MAILRU -> params["url"].orEmpty()
+            else -> ""
+        }
+        return NodeAddress(site, params["k"].orEmpty().trim(), carrier, target)
+    }
+
+    private val TOKEN_CHOSEN = Regex("^[0-9A-Za-z_-]{8,64}$")
+
+    /** A key the user chose for a new install (optional): null when it is empty or can be used. */
+    fun chosenTokenProblem(token: String): String? =
+        if (token.isEmpty() || TOKEN_CHOSEN.matches(token)) null else PhpMessages.TOKEN_SHAPE
+
+    /** What is wrong with a node's access key as typed; null when it can be tried. */
+    fun tokenProblem(token: String): String? = when {
+        token.isBlank() -> "Укажите ключ доступа ноды"
+        token.any { it.isWhitespace() } || token.length > 200 -> "Ключ доступа — одна строка без пробелов"
+        else -> null
+    }
+
+    /** How a key is shown on screen: its ends only, the whole of it is a secret. */
+    fun maskToken(token: String): String = if (token.length <= 8) "•".repeat(token.length) else "${token.take(4)}…${token.takeLast(4)}"
+
+    private fun percentDecode(s: String): String {
+        val out = ArrayList<Byte>(s.length)
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (c == '%' && i + 2 < s.length) {
+                val b = s.substring(i + 1, i + 3).toIntOrNull(16)
+                if (b != null) { out.add(b.toByte()); i += 3; continue }
+            }
+            if (c == '+') out.add(' '.code.toByte()) else c.toString().encodeToByteArray().forEach { out.add(it) }
+            i++
+        }
+        return out.toByteArray().decodeToString()
+    }
 }

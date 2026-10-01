@@ -14,6 +14,7 @@ import io.openflux.desktop.model.PhpHosts
 import io.openflux.desktop.model.PhpInstalled
 import io.openflux.desktop.model.PhpMessages
 import io.openflux.desktop.model.PhpNodeRef
+import io.openflux.desktop.model.PhpNodeState
 import io.openflux.desktop.model.PhpProbe
 import io.openflux.desktop.model.PhpProgress
 import io.openflux.desktop.model.Profile
@@ -35,7 +36,8 @@ enum class PhpStep(val number: Int) { Hosting(1), Channel(2), Install(3), Verify
  * hands back a verified profile. Steps: the hosting's FTP data and the site's
  * address; the channel (a cups.online room the wizard creates, or a Mail.ru
  * document); the install (upload, check the site, start the node); then a
- * real connection through the new node. Every decision is the core's
+ * real connection through the new node. A node already on the hosting (put
+ * there by hand) is added with its site and access key instead of FTP. Every decision is the core's
  * (provision/phphost); this keeps the form and the order of steps, and words
  * what the core reports.
  *
@@ -56,6 +58,9 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
     var notice by mutableStateOf<String?>(null)
 
     // Step 1: the hosting.
+    /** The node is already on the hosting (uploaded by hand): its site and access key, no FTP. */
+    var existing by mutableStateOf(false)
+    var tokenInput by mutableStateOf("")
     var ftpHost by mutableStateOf("")
     var ftpPort by mutableStateOf("21")
     var ftpUser by mutableStateOf("")
@@ -64,6 +69,8 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
     /** "auto" or "none": whether the FTP connection may be plain (some hostings have no TLS). */
     var ftpTls by mutableStateOf("auto")
     var folderInput by mutableStateOf("")
+    /** A key the user chose for the new node (optional: empty keeps the installed node's key or makes one). */
+    var chosenToken by mutableStateOf("")
     /** Shown when the core could not tell which folder is the site: the user picks. */
     var folderChoices by mutableStateOf<List<String>>(emptyList())
         private set
@@ -78,6 +85,9 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
     var target by mutableStateOf("")
         private set
     private var cupsRoomUrl = ""
+    /** The cups.online room the node's address named (an existing node): the wizard keeps it instead of making one. */
+    var knownRoom by mutableStateOf("")
+        private set
 
     // Step 3: install.
     var progress by mutableStateOf<PhpProgress?>(null)
@@ -89,6 +99,9 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
         private set
     /** The node reports running. */
     var nodeRunning by mutableStateOf(false)
+        private set
+    /** What the node last said about itself: running, which generation serves, when it hands over. */
+    var nodeState by mutableStateOf<PhpNodeState?>(null)
         private set
 
     // Step 4: verification and the result.
@@ -109,6 +122,12 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
     /** Leaving now would leave a node on the hosting without a saved profile. */
     val unsaved: Boolean get() = installed != null && !saved
 
+    /** The wizard put the files there itself, so it can take them away again (an existing node has no FTP here). */
+    val canRemove: Boolean get() = !existing && installed != null
+
+    /** The node's access key, shown by its ends only. */
+    val maskedToken: String get() = PhpHosts.maskToken(installed?.token.orEmpty())
+
     /** How the FTP password travelled, when it was not protected well; null otherwise. */
     val securityNote: String? get() = PhpMessages.security(installed?.security ?: probe?.security.orEmpty())
 
@@ -127,6 +146,7 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
         val site = PhpHosts.siteUrl(siteInput)
         if (problems.isNotEmpty()) { error = problems.first(); return }
         if (site == null) { error = "Укажите адрес сайта на хостинге, например https://ваш-сайт.ru"; return }
+        PhpHosts.chosenTokenProblem(chosenToken.trim())?.let { error = it; return }
         siteUrl = site
         val target = ftpTarget()
         launchCall("Проверяю вход на хостинг…", onFailure = { e ->
@@ -142,6 +162,38 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
             if (name.isBlank()) name = "Свой хостинг · ${target.host}"
             step = PhpStep.Channel
         }
+    }
+
+    /**
+     * The address field of an existing node changed: a pasted page address (`…/mailruexit.php?k=…&url=…`)
+     * fills in the key and the channel, so nothing has to be typed twice.
+     */
+    fun onExistingAddress(input: String) {
+        siteInput = input.trim()
+        val node = PhpHosts.nodeAddress(siteInput) ?: return
+        if (node.token.isNotEmpty()) tokenInput = node.token
+        when (node.carrier) {
+            TransportType.CUPSONLINE -> {
+                carrier = TransportType.CUPSONLINE
+                if (node.target.isNotEmpty()) { knownRoom = node.target; cupsRoomUrl = node.target }
+            }
+            TransportType.MAILRU -> {
+                carrier = TransportType.MAILRU
+                if (node.target.isNotEmpty()) mailruInput = node.target
+            }
+            else -> Unit
+        }
+    }
+
+    /** Step 1 for a node already on the hosting: the site and its key are enough. */
+    fun useExisting() {
+        val node = PhpHosts.nodeAddress(siteInput)
+        if (node == null) { error = "Укажите адрес сайта с нодой или адрес её страницы, например https://ваш-сайт.ru"; return }
+        PhpHosts.tokenProblem(tokenInput.trim())?.let { error = it; return }
+        error = null
+        siteUrl = node.site
+        if (name.isBlank()) name = "Свой хостинг · ${node.site.substringAfter("://")}"
+        step = PhpStep.Channel
     }
 
     /** The user picked the site's folder from the list; try again with it. */
@@ -197,18 +249,46 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
 
     /** Uploads the node, checks that the site answers as it, starts it, then verifies the channel. */
     fun install() {
+        if (existing) { attachExisting(); return }
         val ftp = ftp ?: return
         launchCall("Загружаю файлы на хостинг…") {
             progress = null
-            val done = service.deploy(ftp) { p ->
+            val done = service.deploy(ftp, chosenToken.trim()) { p ->
                 progress = p
-                if (p.phase == "upload" && p.of > 0) busy = "Загружаю файлы на хостинг: ${p.n} из ${p.of}…"
+                when (p.phase) {
+                    "upload" -> if (p.of > 0) busy = "Загружаю файлы на хостинг: ${p.n} из ${p.of}…"
+                    "retry" -> {
+                        busy = "Хостинг оборвал передачу ${p.file}, отправляю заново…"
+                        service.note("хостинг оборвал передачу, повторяю: ${p.note}", LogLevel.Warning)
+                    }
+                    "skipped" -> service.note("хостинг не принял необязательный файл, ставлю без него: ${p.note}", LogLevel.Warning)
+                }
             }
             installed = done
             busy = "Проверяю, что сайт отвечает…"
             waitForSite(done.token)
             busy = "Запускаю ноду…"
             val state = service.start(siteUrl, done.token, carrier.cliName, target, chain = true)
+            nodeState = state
+            nodeRunning = state.running
+            step = PhpStep.Verify
+            verify()
+        }
+    }
+
+    /** An existing node: check that the site answers as it with this key, start it, then verify the channel. */
+    private fun attachExisting() {
+        val token = tokenInput.trim()
+        launchCall("Проверяю ноду на сайте…") {
+            try {
+                waitForSite(token)
+            } catch (e: PhpHostingException) {
+                throw if (e.code == "site_token") PhpHostingException("site_token_given") else e
+            }
+            installed = PhpInstalled(token = token, tokenReused = true)
+            busy = "Запускаю ноду…"
+            val state = service.start(siteUrl, token, carrier.cliName, target, chain = true)
+            nodeState = state
             nodeRunning = state.running
             step = PhpStep.Verify
             verify()
@@ -325,7 +405,28 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
 
     fun copyLink() = container.platform.setClipboardText(shareLink)
 
+    /** The node's access key: needed to add this node on another device, or to open its page (…?k=key). */
+    fun copyToken() = installed?.token?.let { container.platform.setClipboardText(it) }
+
     fun qr() = container.platform.qrMatrix(shareLink)
+
+    /** Asks the node how it is: running, which generation serves now. */
+    fun refreshNode() {
+        val token = installed?.token ?: return
+        launchCall("Спрашиваю ноду…") {
+            val state = service.node(siteUrl, token, carrier.cliName, target)
+            nodeState = state
+            nodeRunning = state.running
+        }
+    }
+
+    /** Opens the node's control panel (its page: state, generation, log, Start/Stop) in the browser. */
+    fun openPanel() {
+        val token = installed?.token ?: return
+        launchCall("Открываю панель ноды…") {
+            container.platform.openUrl(service.page(siteUrl, token, carrier.cliName, target))
+        }
+    }
 
     /** Stops the node on the hosting (the whole chain). */
     fun stopNode() {
@@ -333,6 +434,7 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
         launchCall("Останавливаю ноду…") {
             service.stop(siteUrl, token, carrier.cliName, target)
             nodeRunning = false
+            nodeState = null
             notice = "Нода остановлена. Подключение через неё больше не заработает, пока её не запустят снова."
         }
     }
@@ -356,6 +458,7 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
         val state = connection.state.value
         if (!saved && profile != null && state.profile?.id == profile?.id && state.isActive) connection.disconnect()
         ftpPassword = ""
+        tokenInput = ""
         ftp = null
         service.close()
     }

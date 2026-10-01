@@ -100,6 +100,13 @@ open class PhpHostingService(
     open suspend fun node(site: String, token: String, carrier: String, target: String): PhpNodeState =
         data("node", site, PhpNodeState.serializer(), { site(site, token, carrier); put("target", target) })
 
+    /** The node's control panel for a browser (the core makes the address; opening it does not start the node). */
+    open suspend fun page(site: String, token: String, carrier: String, target: String): String {
+        val reply = call("page", site, { site(site, token, carrier); put("target", target) }, quiet = true)
+        return reply.getValue("data").jsonObject["url"]?.jsonPrimitive?.content
+            ?: throw PhpHostingException("bad_params", "page", "no address in the answer")
+    }
+
     /** A new cups.online room for the node and its clients. */
     open suspend fun newRoom(): PhpRoom = data("newRoom", "", PhpRoom.serializer(), {})
 
