@@ -248,7 +248,14 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
             progress = null
             val done = service.deploy(ftp) { p ->
                 progress = p
-                if (p.phase == "upload" && p.of > 0) busy = "Загружаю файлы на хостинг: ${p.n} из ${p.of}…"
+                when (p.phase) {
+                    "upload" -> if (p.of > 0) busy = "Загружаю файлы на хостинг: ${p.n} из ${p.of}…"
+                    "retry" -> {
+                        busy = "Хостинг оборвал передачу ${p.file}, отправляю заново…"
+                        service.note("хостинг оборвал передачу, повторяю: ${p.note}", LogLevel.Warning)
+                    }
+                    "skipped" -> service.note("хостинг не принял необязательный файл, ставлю без него: ${p.note}", LogLevel.Warning)
+                }
             }
             installed = done
             busy = "Проверяю, что сайт отвечает…"

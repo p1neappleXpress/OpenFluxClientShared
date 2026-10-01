@@ -209,6 +209,9 @@ private fun Actions(content: @Composable () -> Unit) {
     }
 }
 
+private const val PARSER_SKIPPED = "Хостинг не принял файл со считывателем ссылок для страницы ноды. Нода работает и без него, " +
+    "только её страница в браузере не покажет ссылку и QR: их даёт приложение."
+
 // ---- step 1 ----
 
 @Composable
@@ -404,6 +407,7 @@ private fun ColumnScope.InstallStep(model: PhpWizardModel) {
     )
     model.installed?.let { done ->
         if (done.tokenReused) Note("Нода на этом хостинге уже была: её ключ доступа сохранён, прежние адреса продолжают работать.")
+        if (done.skipped.isNotEmpty()) Note(PARSER_SKIPPED)
     }
     model.securityNote?.let {
         Spacer(Modifier.height(AppTheme.spacing.m))
@@ -460,6 +464,7 @@ private fun ColumnScope.DoneStep(model: PhpWizardModel, onShowQr: () -> Unit, on
         }
     }
     Note("Ключ доступа нужен, чтобы добавить эту ноду на другом устройстве (пункт «Нода уже залита») или открыть её страницу. Держите его в секрете.")
+    if (model.installed?.skipped?.isNotEmpty() == true) Note(PARSER_SKIPPED)
     Note(
         "Нода сама продлевает себя на хостинге, пока вы ей пользуетесь. Если она остановится, приложение запустит её при подключении, " +
             "когда хостинг доступен напрямую. В сетях, где открыт только канал, запустить её заново нельзя: сделайте это из другой сети.",

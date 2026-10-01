@@ -45,6 +45,8 @@ data class PhpInstalled(
     val bytes: Long = 0,
     val security: String = "",
     @SerialName("token_reused") val tokenReused: Boolean = false,
+    /** Optional files the host would not take (the page's link parser): the node runs without them. */
+    val skipped: List<String> = emptyList(),
 )
 
 /** An upload's progress (phphost.Progress). */
@@ -56,6 +58,8 @@ data class PhpProgress(
     val of: Int = 0,
     @SerialName("bytes_done") val bytesDone: Long = 0,
     @SerialName("bytes_total") val bytesTotal: Long = 0,
+    /** For "retry" and "skipped": what went wrong, in the core's own (technical) words. */
+    val note: String = "",
 ) {
     /** 0..1 over all the bytes. */
     val fraction: Float get() = if (bytesTotal <= 0) 0f else (bytesDone.toFloat() / bytesTotal).coerceIn(0f, 1f)
