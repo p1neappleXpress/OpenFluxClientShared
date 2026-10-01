@@ -14,6 +14,7 @@ import io.openflux.desktop.model.PhpHosts
 import io.openflux.desktop.model.PhpInstalled
 import io.openflux.desktop.model.PhpMessages
 import io.openflux.desktop.model.PhpNodeRef
+import io.openflux.desktop.model.PhpNodeState
 import io.openflux.desktop.model.PhpProbe
 import io.openflux.desktop.model.PhpProgress
 import io.openflux.desktop.model.Profile
@@ -68,6 +69,8 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
     /** "auto" or "none": whether the FTP connection may be plain (some hostings have no TLS). */
     var ftpTls by mutableStateOf("auto")
     var folderInput by mutableStateOf("")
+    /** A key the user chose for the new node (optional: empty keeps the installed node's key or makes one). */
+    var chosenToken by mutableStateOf("")
     /** Shown when the core could not tell which folder is the site: the user picks. */
     var folderChoices by mutableStateOf<List<String>>(emptyList())
         private set
@@ -96,6 +99,9 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
         private set
     /** The node reports running. */
     var nodeRunning by mutableStateOf(false)
+        private set
+    /** What the node last said about itself: running, which generation serves, when it hands over. */
+    var nodeState by mutableStateOf<PhpNodeState?>(null)
         private set
 
     // Step 4: verification and the result.
@@ -140,6 +146,7 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
         val site = PhpHosts.siteUrl(siteInput)
         if (problems.isNotEmpty()) { error = problems.first(); return }
         if (site == null) { error = "Укажите адрес сайта на хостинге, например https://ваш-сайт.ru"; return }
+        PhpHosts.chosenTokenProblem(chosenToken.trim())?.let { error = it; return }
         siteUrl = site
         val target = ftpTarget()
         launchCall("Проверяю вход на хостинг…", onFailure = { e ->
@@ -246,7 +253,7 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
         val ftp = ftp ?: return
         launchCall("Загружаю файлы на хостинг…") {
             progress = null
-            val done = service.deploy(ftp) { p ->
+            val done = service.deploy(ftp, chosenToken.trim()) { p ->
                 progress = p
                 when (p.phase) {
                     "upload" -> if (p.of > 0) busy = "Загружаю файлы на хостинг: ${p.n} из ${p.of}…"
@@ -262,6 +269,7 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
             waitForSite(done.token)
             busy = "Запускаю ноду…"
             val state = service.start(siteUrl, done.token, carrier.cliName, target, chain = true)
+            nodeState = state
             nodeRunning = state.running
             step = PhpStep.Verify
             verify()
@@ -280,6 +288,7 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
             installed = PhpInstalled(token = token, tokenReused = true)
             busy = "Запускаю ноду…"
             val state = service.start(siteUrl, token, carrier.cliName, target, chain = true)
+            nodeState = state
             nodeRunning = state.running
             step = PhpStep.Verify
             verify()
@@ -401,12 +410,31 @@ class PhpWizardModel(private val container: AppContainer, private val scope: Cor
 
     fun qr() = container.platform.qrMatrix(shareLink)
 
+    /** Asks the node how it is: running, which generation serves now. */
+    fun refreshNode() {
+        val token = installed?.token ?: return
+        launchCall("Спрашиваю ноду…") {
+            val state = service.node(siteUrl, token, carrier.cliName, target)
+            nodeState = state
+            nodeRunning = state.running
+        }
+    }
+
+    /** Opens the node's control panel (its page: state, generation, log, Start/Stop) in the browser. */
+    fun openPanel() {
+        val token = installed?.token ?: return
+        launchCall("Открываю панель ноды…") {
+            container.platform.openUrl(service.page(siteUrl, token, carrier.cliName, target))
+        }
+    }
+
     /** Stops the node on the hosting (the whole chain). */
     fun stopNode() {
         val token = installed?.token ?: return
         launchCall("Останавливаю ноду…") {
             service.stop(siteUrl, token, carrier.cliName, target)
             nodeRunning = false
+            nodeState = null
             notice = "Нода остановлена. Подключение через неё больше не заработает, пока её не запустят снова."
         }
     }

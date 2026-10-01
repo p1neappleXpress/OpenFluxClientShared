@@ -23,6 +23,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Stop
@@ -39,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import io.openflux.desktop.model.PhpHosts
+import io.openflux.desktop.model.PhpMessages
 import io.openflux.desktop.model.TransportType
 import io.openflux.desktop.ui.LocalScrollbars
 import io.openflux.desktop.ui.LocalTouchUi
@@ -266,7 +268,7 @@ private fun ColumnScope.HostingStep(model: PhpWizardModel) {
     }
 
     Spacer(Modifier.height(AppTheme.spacing.l))
-    TextAction(if (advanced) "Скрыть дополнительное" else "Дополнительно: порт, шифрование, папка", { advanced = !advanced })
+    TextAction(if (advanced) "Скрыть дополнительное" else "Дополнительно: порт, шифрование, папка, свой ключ", { advanced = !advanced })
     if (advanced) {
         Spacer(Modifier.height(AppTheme.spacing.m))
         Row(horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.m)) {
@@ -275,6 +277,13 @@ private fun ColumnScope.HostingStep(model: PhpWizardModel) {
             AppTextField(model.folderInput, { model.folderInput = it.trim() }, Modifier.weight(1f), label = "Папка сайта (если знаете)",
                 placeholder = "htdocs", enabled = idle)
         }
+        Spacer(Modifier.height(AppTheme.spacing.m))
+        AppTextField(model.chosenToken, { model.chosenToken = it.trim() }, label = "Свой ключ доступа (необязательно)",
+            placeholder = "оставьте пустым — ключ создастся сам", secret = true, enabled = idle)
+        Note(
+            "Ключ охраняет страницу и управление нодой. 8–64 знака: латинские буквы, цифры, «-» и «_». " +
+                "Если на хостинге уже стоит нода, с новым ключом её прежние адреса перестанут работать.",
+        )
         Spacer(Modifier.height(AppTheme.spacing.m))
         AppCard(padding = 0.dp) {
             SwitchRow(
@@ -452,7 +461,7 @@ private fun ColumnScope.DoneStep(model: PhpWizardModel, onShowQr: () -> Unit, on
             KeyValueRow("Внешний адрес", model.verifiedIp, valueColor = AppTheme.colors.success)
         }
         HorizontalRule()
-        KeyValueRow("Нода", if (model.nodeRunning) "работает" else "остановлена")
+        KeyValueRow("Нода", model.nodeState?.let(PhpMessages::nodeStatus) ?: if (model.nodeRunning) "работает" else "остановлена")
         if (model.maskedToken.isNotEmpty()) {
             HorizontalRule()
             KeyValueRow("Ключ доступа", model.maskedToken) {
@@ -489,6 +498,10 @@ private fun ColumnScope.DoneStep(model: PhpWizardModel, onShowQr: () -> Unit, on
             "передавайте их только тем, кому доверяете.",
         Tone.Neutral, icon = Icons.Rounded.Lock,
     )
+    Actions {
+        AppButton("Панель ноды", model::openPanel, style = ButtonStyle.Secondary, leading = Icons.Rounded.OpenInNew, enabled = model.busy == null)
+        AppButton("Обновить состояние", model::refreshNode, style = ButtonStyle.Secondary, leading = Icons.Rounded.Refresh, enabled = model.busy == null)
+    }
     Actions {
         AppButton("Остановить ноду", model::stopNode, style = ButtonStyle.Ghost, leading = Icons.Rounded.Stop, enabled = model.busy == null && model.nodeRunning)
         if (model.canRemove) {

@@ -324,6 +324,50 @@ class PhpWizardModelTest {
         assertEquals("Ключ доступа — одна строка без пробелов", PhpHosts.tokenProblem("a b"))
     }
 
+    // ---- a key of one's own, the generation, the panel ----
+
+    @Test
+    fun aChosenKeyGoesToTheInstallAndABadOneStopsTheForm() = runTest {
+        val env = Env()
+        val wizard = PhpWizardModel(env.container, this)
+        wizard.fillHosting()
+        wizard.chosenToken = "bad key"
+        wizard.probeHosting()
+        advanceUntilIdle()
+        assertEquals(PhpMessages.TOKEN_SHAPE, wizard.error)
+        assertTrue(env.php.probed.isEmpty(), "nothing reaches the core with a bad key")
+
+        wizard.chosenToken = "My-own_key-2026"
+        wizard.probeHosting()
+        advanceUntilIdle()
+        wizard.prepareChannel()
+        advanceUntilIdle()
+        wizard.install()
+        advanceUntilIdle()
+        assertEquals("My-own_key-2026", env.php.deployToken)
+    }
+
+    @Test
+    fun theDoneStepShowsTheGenerationAndOpensThePanel() = runTest {
+        val env = Env()
+        val wizard = PhpWizardModel(env.container, this)
+        wizard.fillHosting()
+        wizard.probeHosting(); advanceUntilIdle()
+        wizard.prepareChannel(); advanceUntilIdle()
+        wizard.install(); advanceUntilIdle()
+        assertEquals("", env.php.deployToken, "no chosen key: the core keeps the old one or makes one")
+        assertEquals("работает · поколение 3 · смена через 30 с", PhpMessages.nodeStatus(wizard.nodeState!!))
+
+        wizard.refreshNode(); advanceUntilIdle()
+        assertEquals(4, wizard.nodeState?.state?.gen)
+        assertEquals("работает · поколение 4 · смена через 12 с · предыдущее дорабатывает соединения", PhpMessages.nodeStatus(wizard.nodeState!!))
+
+        wizard.openPanel(); advanceUntilIdle()
+        assertEquals(listOf("https://mysite.42web.io|tok123|cupsonline"), env.php.pages)
+        assertEquals(listOf("https://mysite.42web.io/cupsexit.php?k=tok123&auto=0"), env.platform.opened)
+        assertEquals("остановлена", PhpMessages.nodeStatus(io.openflux.desktop.model.PhpNodeState()))
+    }
+
     // ---- fakes ----
 
     private class FakePhp : PhpHostingService() {
@@ -344,8 +388,12 @@ class PhpWizardModelTest {
             return PhpProbe(security = "none", dir = "htdocs", writable = true)
         }
 
+        var deployToken = "?"
+        val pages = mutableListOf<String>()
+
         override suspend fun deploy(ftp: FtpTarget, token: String, onProgress: (PhpProgress) -> Unit): PhpInstalled {
             steps += "deploy"
+            deployToken = token
             onProgress(PhpProgress("upload", "lib/mux.php", 1, 2, 10, 100))
             return PhpInstalled(dir = "htdocs", token = "tok123", files = 12, bytes = 100, security = "none")
         }
@@ -362,10 +410,20 @@ class PhpWizardModelTest {
         override suspend fun start(site: String, token: String, carrier: String, target: String, chain: Boolean, quiet: Boolean): PhpNodeState {
             steps += "start chain=$chain"
             tokens += token
-            return PhpNodeState(running = true, chain = chain)
+            return PhpNodeState(running = true, chain = chain, nextIn = 30, state = io.openflux.desktop.model.PhpNodeInfo(gen = 3, phase = "serving"))
         }
 
         override suspend fun stop(site: String, token: String, carrier: String, target: String) { steps += "stop" }
+        override suspend fun node(site: String, token: String, carrier: String, target: String): PhpNodeState {
+            steps += "node"
+            return PhpNodeState(running = true, chain = true, draining = 1, nextIn = 12, state = io.openflux.desktop.model.PhpNodeInfo(gen = 4, phase = "serving"))
+        }
+
+        override suspend fun page(site: String, token: String, carrier: String, target: String): String {
+            pages += "$site|$token|$carrier"
+            return "$site/${if (carrier == "mailru") "mailruexit" else "cupsexit"}.php?k=$token&auto=0"
+        }
+
         override suspend fun newRoom(): PhpRoom {
             roomsMade++
             return PhpRoom("0a1b2c3d-1111-2222-3333-444455556666", "https://interview.cups.online/live-coding/?room=0a1b2c3d-1111-2222-3333-444455556666")
@@ -454,7 +512,8 @@ class PhpWizardModelTest {
         override suspend fun pickFile(title: String, extensions: List<String>): String? = null
         override fun readTextFile(path: String, maxBytes: Int): String? = null
         override fun qrMatrix(text: String): List<BooleanArray> = emptyList()
-        override fun openUrl(url: String) = Unit
+        val opened = mutableListOf<String>()
+        override fun openUrl(url: String) { opened += url }
         override fun newSecret() = "00".repeat(32)
         override fun now() = System.currentTimeMillis() + skipped
         override suspend fun latestRelease(): String? = null

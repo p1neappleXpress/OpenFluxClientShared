@@ -1,5 +1,7 @@
 package io.openflux.desktop.ui.profiles
 
+import io.openflux.desktop.model.PhpMessages
+
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -156,7 +158,18 @@ class ProfilesScreenModel(private val container: AppContainer) : ScreenModel {
     /** Runs the node of a hosting profile (idempotent: one already running is left alone). */
     fun startNode(profile: Profile) = nodeControl(profile, "Запускаю ноду…") { node ->
         val state = container.phpHosting.start(node.siteUrl, node.token, profile.transport.cliName, profile.value.trim(), chain = true)
-        if (state.running) "Нода работает" else "Нода не ответила"
+        if (state.running) "Нода: ${PhpMessages.nodeStatus(state)}" else "Нода не ответила"
+    }
+
+    /** Asks the node how it is: running, which generation serves now, when it hands over. */
+    fun refreshNode(profile: Profile) = nodeControl(profile, "Спрашиваю ноду…", unreachable = "Состояние ноды неизвестно: хостинг не ответил") { node ->
+        "Нода: " + PhpMessages.nodeStatus(container.phpHosting.node(node.siteUrl, node.token, profile.transport.cliName, profile.value.trim()))
+    }
+
+    /** Opens the node's control panel (its page in the browser: state, generation, log, Start/Stop). */
+    fun openNodePanel(profile: Profile) = nodeControl(profile, "Открываю панель ноды…") { node ->
+        container.platform.openUrl(container.phpHosting.page(node.siteUrl, node.token, profile.transport.cliName, profile.value.trim()))
+        "" // keep what was shown before
     }
 
     /** Stops the node on the hosting (the whole chain); a connection through it stops working. */
@@ -165,18 +178,24 @@ class ProfilesScreenModel(private val container: AppContainer) : ScreenModel {
         "Нода остановлена"
     }
 
-    private fun nodeControl(profile: Profile, busyText: String, action: suspend (io.openflux.desktop.model.PhpNodeRef) -> String) {
+    private fun nodeControl(
+        profile: Profile,
+        busyText: String,
+        unreachable: String? = null,
+        action: suspend (io.openflux.desktop.model.PhpNodeRef) -> String,
+    ) {
         val node = profile.phpNode ?: return
         if (nodeBusy) return
         nodeBusy = true
+        val before = nodeMessage
         nodeMessage = busyText
         screenModelScope.launch {
             nodeMessage = try {
-                action(node)
+                action(node).ifEmpty { before }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                e.message ?: "Не удалось связаться с хостингом"
+                unreachable ?: e.message ?: "Не удалось связаться с хостингом"
             } finally {
                 nodeBusy = false
             }

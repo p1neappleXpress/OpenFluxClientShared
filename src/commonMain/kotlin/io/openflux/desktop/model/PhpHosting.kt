@@ -76,14 +76,22 @@ data class PhpStatus(
     val parser: Boolean = false,
 )
 
-/** Whether the node is running (phphost.NodeState). */
+/** Whether the node is running, and which of its generations serves now (phphost.NodeState). */
 @Serializable
 data class PhpNodeState(
     val running: Boolean = false,
+    /** Earlier generations still finishing their connections after a handover. */
     val draining: Int = 0,
     val chain: Boolean = false,
     val stopping: Boolean = false,
+    /** Seconds until the serving generation hands over to the next (continuous mode). */
+    @SerialName("next_in") val nextIn: Int? = null,
+    val state: PhpNodeInfo = PhpNodeInfo(),
 )
+
+/** The serving (or last) generation as the node reports it. */
+@Serializable
+data class PhpNodeInfo(val gen: Int = 0, val phase: String = "", val reason: String = "")
 
 /** A cups.online room made for the node: its uuid and the address clients and the node take. */
 @Serializable
@@ -117,7 +125,11 @@ object PhpMessages {
     )
 
     fun text(code: String, param: String = "", detail: String = ""): String = when (code) {
-        "bad_params" -> if (param == "host/user/password") "Укажите адрес FTP-сервера, логин и пароль" else "Проверьте введённые данные"
+        "bad_params" -> when (param) {
+            "host/user/password" -> "Укажите адрес FTP-сервера, логин и пароль"
+            "token" -> TOKEN_SHAPE
+            else -> "Проверьте введённые данные"
+        }
         "ftp_connect" -> "Не удалось подключиться к FTP-серверу${if (param.isNotBlank()) " $param" else ""}: проверьте адрес и порт, " +
             "что хостинг пускает FTP из вашей сети и что это FTP или FTPS, а не SFTP (SSH)"
         "ftp_login" -> "FTP не принял логин или пароль. Пароль FTP на хостинге часто не совпадает с паролем от личного кабинета"
@@ -138,6 +150,22 @@ object PhpMessages {
         "php_missing" -> "На этом хостинге отключены PHP-функции, без которых нода не работает: $param"
         "node_not_started" -> "Нода не запустилась за отведённое время. Откройте адрес ноды в браузере: там виден её журнал"
         else -> if (detail.isNotBlank()) "Ошибка установки на хостинг: $detail" else "Ошибка установки на хостинг"
+    }
+
+    const val TOKEN_SHAPE = "Свой ключ доступа: от 8 до 64 знаков — латинские буквы, цифры, «-» и «_»"
+
+    /** The node's state in a line: running and which generation, or stopped. */
+    fun nodeStatus(s: PhpNodeState): String = buildString {
+        if (!s.running) {
+            append(if (s.stopping) "останавливается" else "остановлена")
+            return@buildString
+        }
+        append(if (s.state.phase == "connecting") "подключается" else "работает")
+        if (s.state.gen > 0) append(" · поколение ${s.state.gen}")
+        val next = s.nextIn
+        if (s.chain && next != null) append(" · смена через $next с")
+        if (s.draining > 0) append(" · предыдущее дорабатывает соединения")
+        if (s.stopping) append(" · останавливается")
     }
 
     /** What the user should know about how the FTP password travelled. */
@@ -240,6 +268,12 @@ object PhpHosts {
         }
         return NodeAddress(site, params["k"].orEmpty().trim(), carrier, target)
     }
+
+    private val TOKEN_CHOSEN = Regex("^[0-9A-Za-z_-]{8,64}$")
+
+    /** A key the user chose for a new install (optional): null when it is empty or can be used. */
+    fun chosenTokenProblem(token: String): String? =
+        if (token.isEmpty() || TOKEN_CHOSEN.matches(token)) null else PhpMessages.TOKEN_SHAPE
 
     /** What is wrong with a node's access key as typed; null when it can be tried. */
     fun tokenProblem(token: String): String? = when {

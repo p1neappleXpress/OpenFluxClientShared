@@ -38,8 +38,10 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FileCopy
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.QrCode2
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.Icon
@@ -468,12 +470,21 @@ private fun ProfileDetails(model: ProfilesScreenModel, profile: Profile, state: 
                         }
                     }
                 }
+                // What the node says now (running, which generation serves): asked once when the profile opens.
+                LaunchedEffect(profile.id) { model.refreshNode(profile) }
                 Spacer(Modifier.height(AppTheme.spacing.m))
                 ButtonRow {
                     AppButton(if (model.nodeBusy) "Подождите…" else "Запустить ноду", { model.startNode(profile) },
                         style = ButtonStyle.Secondary, leading = Icons.Rounded.PlayArrow, enabled = !model.nodeBusy)
                     AppButton("Остановить ноду", { model.stopNode(profile) }, style = ButtonStyle.Ghost,
                         leading = Icons.Rounded.Stop, enabled = !model.nodeBusy)
+                }
+                Spacer(Modifier.height(AppTheme.spacing.s))
+                ButtonRow {
+                    AppButton("Панель ноды", { model.openNodePanel(profile) }, style = ButtonStyle.Secondary,
+                        leading = Icons.Rounded.OpenInNew, enabled = !model.nodeBusy)
+                    AppButton("Обновить состояние", { model.refreshNode(profile) }, style = ButtonStyle.Ghost,
+                        leading = Icons.Rounded.Refresh, enabled = !model.nodeBusy)
                 }
                 model.nodeMessage?.let {
                     Spacer(Modifier.height(AppTheme.spacing.s))
