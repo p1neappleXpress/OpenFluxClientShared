@@ -114,6 +114,8 @@ object CoreConfig {
             if (settings.fullTunnel) {
                 add("--inbound=tun")
             } else {
+                // Named, not left to the core: core 0.3.0 takes utun for a client on macOS when --inbound is missing.
+                add("--inbound=socks5")
                 add("--socks5=$socks")
                 add("--http-proxy=$http")
             }

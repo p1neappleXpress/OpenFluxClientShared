@@ -83,7 +83,7 @@ class StreamProfileTest {
         val proxy = CoreConfig.build(cups(), AppSettings(socksPort = 1090), paths)
         assertEquals(
             listOf(
-                "--role=client", "--mode=stream", "--socks5=127.0.0.1:1090", "--http-proxy=127.0.0.1:1091",
+                "--role=client", "--mode=stream", "--inbound=socks5", "--socks5=127.0.0.1:1090", "--http-proxy=127.0.0.1:1091",
                 "--transport=cupsonline", "--url=$room", "--ipc-socket=C:/rt/ipc.sock",
             ),
             proxy.arguments,
