@@ -458,6 +458,15 @@ private fun ProfileDetails(model: ProfilesScreenModel, profile: Profile, state: 
                             toaster.show("Скопировано")
                         }, icon = Icons.Rounded.ContentCopy)
                     }
+                    if (node.token.isNotEmpty()) {
+                        HorizontalRule()
+                        KeyValueRow("Ключ доступа", io.openflux.desktop.model.PhpHosts.maskToken(node.token)) {
+                            AppIconButton("Копировать ключ", {
+                                model.copy(node.token)
+                                toaster.show("Ключ доступа скопирован")
+                            }, icon = Icons.Rounded.ContentCopy)
+                        }
+                    }
                 }
                 Spacer(Modifier.height(AppTheme.spacing.m))
                 ButtonRow {

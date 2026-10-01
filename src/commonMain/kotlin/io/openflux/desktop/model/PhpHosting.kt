@@ -128,6 +128,9 @@ object PhpMessages {
             "Откройте адрес ноды в браузере и повторите"
         "site_not_phpbox" -> "Сайт отвечает, но это не нода: проверьте адрес сайта, папку, в которую залиты файлы, и что на хостинге включён PHP"
         "site_token" -> "Нода не приняла ключ доступа: на хостинге лежат файлы от другой установки. Установите заново"
+        // The app's own reason: a key the user typed for a node already on the hosting did not fit.
+        "site_token_given" -> "Нода не приняла этот ключ доступа. Ключ стоит в адресе страницы ноды после «k=» " +
+            "и в файле config.php на хостинге (PHPBOX_TOKEN)"
         "php_missing" -> "На этом хостинге отключены PHP-функции, без которых нода не работает: $param"
         "node_not_started" -> "Нода не запустилась за отведённое время. Откройте адрес ноды в браузере: там виден её журнал"
         else -> if (detail.isNotBlank()) "Ошибка установки на хостинг: $detail" else "Ошибка установки на хостинг"
@@ -206,4 +209,56 @@ object PhpHosts {
 
     /** The carriers the PHP node has a port for, as the wizard offers them. */
     val carriers = listOf(TransportType.CUPSONLINE, TransportType.MAILRU)
+
+    /**
+     * What the address of a node's page tells, when the user pastes it instead of a bare site:
+     * `https://site/mailruexit.php?k=KEY&url=DOC` or `https://site/cupsexit.php?k=KEY&room=UUID`.
+     * [token], [carrier] and [target] are empty or null when the address does not carry them.
+     */
+    data class NodeAddress(val site: String, val token: String, val carrier: TransportType?, val target: String)
+
+    /** The parts of a node page's address; null when [input] is not an address of a site at all. */
+    fun nodeAddress(input: String): NodeAddress? {
+        val s = input.trim()
+        val site = siteUrl(s) ?: return null
+        val path = s.substringAfter("://").substringAfter('/', "").substringBefore('?').substringBefore('#').lowercase()
+        val query = s.substringAfter('?', "").substringBefore('#')
+        val params = query.split('&').filter { '=' in it }.associate { it.substringBefore('=') to percentDecode(it.substringAfter('=')) }
+        val carrier = when {
+            path.endsWith("cupsexit.php") -> TransportType.CUPSONLINE
+            path.endsWith("mailruexit.php") -> TransportType.MAILRU
+            else -> null
+        }
+        val target = when (carrier) {
+            TransportType.CUPSONLINE -> cupsRoom(params["room"].orEmpty()) ?: cupsRoom(params["url"].orEmpty()).orEmpty()
+            TransportType.MAILRU -> params["url"].orEmpty()
+            else -> ""
+        }
+        return NodeAddress(site, params["k"].orEmpty().trim(), carrier, target)
+    }
+
+    /** What is wrong with a node's access key as typed; null when it can be tried. */
+    fun tokenProblem(token: String): String? = when {
+        token.isBlank() -> "Укажите ключ доступа ноды"
+        token.any { it.isWhitespace() } || token.length > 200 -> "Ключ доступа — одна строка без пробелов"
+        else -> null
+    }
+
+    /** How a key is shown on screen: its ends only, the whole of it is a secret. */
+    fun maskToken(token: String): String = if (token.length <= 8) "•".repeat(token.length) else "${token.take(4)}…${token.takeLast(4)}"
+
+    private fun percentDecode(s: String): String {
+        val out = ArrayList<Byte>(s.length)
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (c == '%' && i + 2 < s.length) {
+                val b = s.substring(i + 1, i + 3).toIntOrNull(16)
+                if (b != null) { out.add(b.toByte()); i += 3; continue }
+            }
+            if (c == '+') out.add(' '.code.toByte()) else c.toString().encodeToByteArray().forEach { out.add(it) }
+            i++
+        }
+        return out.toByteArray().decodeToString()
+    }
 }

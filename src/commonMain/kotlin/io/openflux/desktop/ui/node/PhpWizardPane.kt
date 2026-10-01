@@ -160,7 +160,8 @@ private fun Header(model: PhpWizardModel, onClose: () -> Unit) {
     val (title, subtitle) = when (model.step) {
         PhpStep.Hosting -> "Без своего сервера" to "Нода встанет на любой хостинг с PHP и FTP."
         PhpStep.Channel -> "Канал связи" to "Через что устройство и нода на хостинге будут находить друг друга."
-        PhpStep.Install -> "Установка на хостинг" to "Мастер зальёт файлы ноды и запустит её."
+        PhpStep.Install -> if (model.existing) "Подключение ноды" to "Мастер проверит ноду на сайте и запустит её."
+            else "Установка на хостинг" to "Мастер зальёт файлы ноды и запустит её."
         PhpStep.Verify -> "Проверка" to "Подключаюсь через новую ноду и открываю сайт."
         PhpStep.Done -> "Нода готова" to if (model.verifiedIp.isEmpty()) "Нода установлена, но проверка не завершена."
             else "Трафик выходит в интернет с адреса ${model.verifiedIp}."
@@ -214,6 +215,10 @@ private fun Actions(content: @Composable () -> Unit) {
 private fun ColumnScope.HostingStep(model: PhpWizardModel) {
     val idle = model.busy == null
     var advanced by remember { mutableStateOf(false) }
+    Segmented(listOf(false, true), model.existing, { if (it) "Нода уже залита" else "Залить по FTP" },
+        { model.existing = it; model.error = null }, enabled = idle)
+    Spacer(Modifier.height(AppTheme.spacing.l))
+    if (model.existing) { ExistingNodeFields(model); return }
     Banner(
         "Подойдёт любой хостинг: бесплатный или платный, российский или зарубежный, лишь бы на нём работал PHP и был доступ по FTP или FTPS " +
             "(SFTP по SSH не подходит). Понадобятся адрес FTP-сервера, логин и пароль от FTP и адрес вашего сайта на этом хостинге.",
@@ -281,6 +286,30 @@ private fun ColumnScope.HostingStep(model: PhpWizardModel) {
     }
 }
 
+/** A node already on the hosting (uploaded by hand, or by another device): its site and access key. */
+@Composable
+private fun ColumnScope.ExistingNodeFields(model: PhpWizardModel) {
+    val idle = model.busy == null
+    Banner(
+        "Файлы ноды уже лежат на хостинге (вы залили их сами или с другого устройства). FTP не нужен: " +
+            "достаточно адреса сайта и ключа доступа ноды.",
+        Tone.Neutral, icon = Icons.Rounded.Info,
+    )
+    Spacer(Modifier.height(AppTheme.spacing.l))
+    AppTextField(model.siteInput, model::onExistingAddress, label = "Адрес сайта или страницы ноды",
+        placeholder = "https://ваш-сайт.ru/mailruexit.php?k=…", enabled = idle)
+    Note("Можно вставить адрес страницы ноды целиком: ключ, канал и комната или документ подставятся сами.")
+    Spacer(Modifier.height(AppTheme.spacing.m))
+    AppTextField(model.tokenInput, { model.tokenInput = it.trim() }, label = "Ключ доступа ноды", secret = true, enabled = idle)
+    Note(
+        "Ключ стоит в адресе страницы ноды после «k=» и в файле config.php на хостинге (PHPBOX_TOKEN). " +
+            "Он даёт управлять нодой: храните его как пароль.",
+    )
+    Actions {
+        AppButton("Далее", model::useExisting, enabled = idle)
+    }
+}
+
 // ---- step 2 ----
 
 @Composable
@@ -304,6 +333,14 @@ private fun ColumnScope.ChannelStep(model: PhpWizardModel) {
         }
         Spacer(Modifier.height(AppTheme.spacing.l))
     }
+    if (model.existing) {
+        AppCard(padding = 0.dp) {
+            KeyValueRow("Сайт", model.siteUrl)
+            HorizontalRule()
+            KeyValueRow("Ключ доступа", PhpHosts.maskToken(model.tokenInput.trim()))
+        }
+        Spacer(Modifier.height(AppTheme.spacing.l))
+    }
     AppTextField(model.name, { model.name = it }, label = "Название профиля", enabled = idle)
 
     Spacer(Modifier.height(AppTheme.spacing.xl))
@@ -318,7 +355,8 @@ private fun ColumnScope.ChannelStep(model: PhpWizardModel) {
     Spacer(Modifier.height(AppTheme.spacing.m))
     when (model.carrier) {
         TransportType.CUPSONLINE -> Banner(
-            "Комнату мастер создаст сам, вводить ничего не нужно. Это самый простой вариант.",
+            if (model.knownRoom.isNotEmpty()) "Комната из адреса ноды: ${model.knownRoom.substringAfter("room=")}"
+            else "Комнату мастер создаст сам, вводить ничего не нужно. Это самый простой вариант.",
             Tone.Neutral, icon = Icons.Rounded.Info,
         )
         else -> {
@@ -339,6 +377,20 @@ private fun ColumnScope.ChannelStep(model: PhpWizardModel) {
 @Composable
 private fun ColumnScope.InstallStep(model: PhpWizardModel) {
     val idle = model.busy == null
+    if (model.existing) {
+        AppCard(padding = 0.dp) {
+            KeyValueRow("Сайт", model.siteUrl)
+            HorizontalRule()
+            KeyValueRow("Ключ доступа", PhpHosts.maskToken(model.tokenInput.trim()))
+            HorizontalRule()
+            KeyValueRow("Канал", if (model.carrier == TransportType.CUPSONLINE) "Cups.online" else "Mail.ru Документы")
+        }
+        Note("Мастер проверит, что сайт отвечает как нода с этим ключом, запустит её и подключится через неё. Файлы на хостинге он не трогает.")
+        Actions {
+            AppButton(if (idle) "Проверить и запустить" else "Проверяю…", model::install, enabled = idle)
+        }
+        return
+    }
     AppCard(padding = 0.dp) {
         KeyValueRow("Хостинг", "${model.ftpUser.trim()}@${model.ftpHost.trim()}")
         HorizontalRule()
@@ -397,7 +449,17 @@ private fun ColumnScope.DoneStep(model: PhpWizardModel, onShowQr: () -> Unit, on
         }
         HorizontalRule()
         KeyValueRow("Нода", if (model.nodeRunning) "работает" else "остановлена")
+        if (model.maskedToken.isNotEmpty()) {
+            HorizontalRule()
+            KeyValueRow("Ключ доступа", model.maskedToken) {
+                AppIconButton("Копировать ключ", {
+                    model.copyToken()
+                    toaster.show("Ключ доступа скопирован", Tone.Success)
+                }, icon = Icons.Rounded.ContentCopy)
+            }
+        }
     }
+    Note("Ключ доступа нужен, чтобы добавить эту ноду на другом устройстве (пункт «Нода уже залита») или открыть её страницу. Держите его в секрете.")
     Note(
         "Нода сама продлевает себя на хостинге, пока вы ей пользуетесь. Если она остановится, приложение запустит её при подключении, " +
             "когда хостинг доступен напрямую. В сетях, где открыт только канал, запустить её заново нельзя: сделайте это из другой сети.",
@@ -424,7 +486,9 @@ private fun ColumnScope.DoneStep(model: PhpWizardModel, onShowQr: () -> Unit, on
     )
     Actions {
         AppButton("Остановить ноду", model::stopNode, style = ButtonStyle.Ghost, leading = Icons.Rounded.Stop, enabled = model.busy == null && model.nodeRunning)
-        AppButton("Удалить с хостинга", model::removeFromHosting, style = ButtonStyle.Ghost, leading = Icons.Rounded.Delete, enabled = model.busy == null && model.installed != null)
+        if (model.canRemove) {
+            AppButton("Удалить с хостинга", model::removeFromHosting, style = ButtonStyle.Ghost, leading = Icons.Rounded.Delete, enabled = model.busy == null)
+        }
         AppButton("Готово", onClose, style = ButtonStyle.Ghost)
     }
 }

@@ -9,6 +9,8 @@ import io.openflux.desktop.model.FtpTarget
 import io.openflux.desktop.model.LogLevel
 import io.openflux.desktop.model.LogLine
 import io.openflux.desktop.model.PhpHostingException
+import io.openflux.desktop.model.PhpHosts
+import io.openflux.desktop.model.PhpMessages
 import io.openflux.desktop.model.PhpInstalled
 import io.openflux.desktop.model.PhpNodeState
 import io.openflux.desktop.model.PhpProbe
@@ -225,6 +227,103 @@ class PhpWizardModelTest {
         assertFalse(wizard.unsaved, "nothing is left on the host to lose")
     }
 
+    // ---- a node already on the hosting ----
+
+    @Test
+    fun aNodeUploadedByHandIsAddedFromItsPageAddress() = runTest {
+        val env = Env()
+        val wizard = PhpWizardModel(env.container, this)
+        wizard.existing = true
+        wizard.onExistingAddress(
+            "https://mysite.42web.io/mailruexit.php?k=handkey99&url=https%3A%2F%2Fcloud.mail.ru%2Fpublic%2FVuri%2Fd5nuZ5aQp",
+        )
+        assertEquals("handkey99", wizard.tokenInput, "the key comes from the page address")
+        assertEquals(TransportType.MAILRU, wizard.carrier)
+        assertEquals("https://cloud.mail.ru/public/Vuri/d5nuZ5aQp", wizard.mailruInput)
+
+        wizard.useExisting()
+        assertNull(wizard.error)
+        assertEquals(PhpStep.Channel, wizard.step)
+        assertEquals("https://mysite.42web.io", wizard.siteUrl)
+        assertEquals("Свой хостинг · mysite.42web.io", wizard.name)
+
+        wizard.prepareChannel()
+        advanceUntilIdle()
+        assertEquals(PhpStep.Install, wizard.step)
+        assertEquals("https://cloud.mail.ru/public/Vuri/d5nuZ5aQp", wizard.target)
+
+        wizard.install()
+        advanceUntilIdle()
+        assertEquals(PhpStep.Done, wizard.step, wizard.verifyFailed ?: wizard.error ?: "")
+        assertEquals(listOf("check", "start chain=true"), env.php.steps, "no FTP and no upload for a node already there")
+        assertTrue(env.php.probed.isEmpty())
+        assertEquals(listOf("handkey99", "handkey99"), env.php.tokens)
+        assertFalse(wizard.canRemove, "the wizard did not put the files there, so it offers no removal")
+        assertEquals("hand…ey99", wizard.maskedToken)
+
+        val saved = wizard.save()!!
+        assertEquals("https://mysite.42web.io", saved.phpNode?.siteUrl)
+        assertEquals("handkey99", saved.phpNode?.token)
+        assertEquals(TransportType.MAILRU, saved.transport)
+        wizard.close()
+        assertEquals("", wizard.tokenInput)
+    }
+
+    @Test
+    fun aCupsNodeKeepsTheRoomItsAddressNames() = runTest {
+        val env = Env()
+        val wizard = PhpWizardModel(env.container, this)
+        wizard.existing = true
+        wizard.onExistingAddress("https://mysite.42web.io/cupsexit.php?k=abc12345&room=0A1B2C3D-1111-2222-3333-444455556666")
+        assertEquals(TransportType.CUPSONLINE, wizard.carrier)
+        assertEquals(room, wizard.knownRoom)
+        wizard.useExisting()
+        wizard.prepareChannel()
+        advanceUntilIdle()
+        assertEquals(room, wizard.target)
+        assertEquals(0, env.php.roomsMade, "the node already waits in its room: no new one")
+    }
+
+    @Test
+    fun aWrongKeyIsWordedForTheUserWhoTypedIt() = runTest {
+        val env = Env()
+        val wizard = PhpWizardModel(env.container, this)
+        wizard.existing = true
+        wizard.onExistingAddress("mysite.42web.io")
+        wizard.useExisting()
+        assertEquals("Укажите ключ доступа ноды", wizard.error)
+        assertEquals(PhpStep.Hosting, wizard.step)
+
+        wizard.tokenInput = "wrong"
+        wizard.useExisting()
+        wizard.prepareChannel()
+        advanceUntilIdle()
+        env.php.checkFailures += "site_token"
+        wizard.install()
+        advanceUntilIdle()
+        assertEquals(PhpMessages.text("site_token_given"), wizard.error)
+        assertTrue(wizard.error!!.contains("k="))
+        assertEquals(PhpStep.Install, wizard.step)
+        assertNull(wizard.installed, "nothing is kept from a key the node refused")
+        assertEquals(listOf("check"), env.php.steps)
+    }
+
+    @Test
+    fun aNodePageAddressIsReadApart() {
+        val m = PhpHosts.nodeAddress("https://site.example.org/sub/mailruexit.php?k=K1&url=https%3A%2F%2Fcloud.mail.ru%2Fpublic%2Fa%2Fb")!!
+        assertEquals("https://site.example.org", m.site)
+        assertEquals("K1", m.token)
+        assertEquals(TransportType.MAILRU, m.carrier)
+        assertEquals("https://cloud.mail.ru/public/a/b", m.target)
+        val plain = PhpHosts.nodeAddress("site.example.org")!!
+        assertEquals("https://site.example.org", plain.site)
+        assertEquals("", plain.token)
+        assertNull(plain.carrier)
+        assertNull(PhpHosts.nodeAddress("not a site"))
+        assertEquals("••••", PhpHosts.maskToken("abcd"))
+        assertEquals("Ключ доступа — одна строка без пробелов", PhpHosts.tokenProblem("a b"))
+    }
+
     // ---- fakes ----
 
     private class FakePhp : PhpHostingService() {
@@ -236,6 +335,7 @@ class PhpWizardModelTest {
         var checkFailures = mutableListOf<String>()
         var checkParam = ""
         var closed = false
+        val tokens = mutableListOf<String>()      // the key each call to the site carried
 
         override suspend fun probe(ftp: FtpTarget): PhpProbe {
             lastFtp = ftp
@@ -254,12 +354,14 @@ class PhpWizardModelTest {
 
         override suspend fun check(site: String, token: String, carrier: String): PhpStatus {
             steps += "check"
+            tokens += token
             if (checkFailures.isNotEmpty()) throw PhpHostingException(checkFailures.removeAt(0), checkParam)
             return PhpStatus(version = "0.4", carrier = carrier, php = "8.4")
         }
 
         override suspend fun start(site: String, token: String, carrier: String, target: String, chain: Boolean, quiet: Boolean): PhpNodeState {
             steps += "start chain=$chain"
+            tokens += token
             return PhpNodeState(running = true, chain = chain)
         }
 
