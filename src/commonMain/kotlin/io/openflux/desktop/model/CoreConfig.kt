@@ -8,6 +8,9 @@ data class CorePaths(
     val ipcSocket: String?,
 )
 
+/** A SCRIPT carrier's on-disk path + pinned key, resolved by the platform layer for CoreConfig.build/session. */
+data class ScriptCarrierLookup(val path: String, val pubkeyHex: String, val name: String)
+
 /** How to start the core for a profile: the .conf body (Session) and flags. */
 data class CoreLaunch(
     val arguments: List<String>,
@@ -26,7 +29,20 @@ data class CoreLaunch(
 object CoreConfig {
     const val LOOPBACK = "127.0.0.1"
 
-    fun build(profile: Profile, settings: AppSettings, paths: CorePaths): CoreLaunch {
+    /**
+     * [scriptCarrier] resolves a SCRIPT carrier's installed script (by
+     * [ExtraTransport.scriptId]/[SessionSpec.scriptId]) to its on-disk path
+     * and pinned key - platform-specific (the scripts directory lives under
+     * each app's own data folder), so it is injected rather than looked up
+     * here. The default (never called in practice: a script-less profile
+     * never reaches it) keeps every other caller/test source-compatible.
+     */
+    fun build(
+        profile: Profile,
+        settings: AppSettings,
+        paths: CorePaths,
+        scriptCarrier: (scriptId: String) -> ScriptCarrierLookup? = { null },
+    ): CoreLaunch {
         val problems = profile.problems()
         require(problems.isEmpty()) { problems.first() }
         val exit = settings.mode == ConnectionMode.Exit
@@ -36,10 +52,13 @@ object CoreConfig {
             require(!exit) { "Режим без сервера работает только как клиент: выхода в нём нет, сервер заменяет PHP-хостинг" }
             return stream(profile, settings, paths, socks, http)
         }
-        return if (profile.session) session(profile, settings, paths, exit, socks, http) else classic(profile, settings, paths, exit, socks, http)
+        return if (profile.session) session(profile, settings, paths, exit, socks, http, scriptCarrier) else classic(profile, settings, paths, exit, socks, http)
     }
 
-    private fun session(profile: Profile, settings: AppSettings, paths: CorePaths, exit: Boolean, socks: String, http: String): CoreLaunch {
+    private fun session(
+        profile: Profile, settings: AppSettings, paths: CorePaths, exit: Boolean, socks: String, http: String,
+        scriptCarrier: (scriptId: String) -> ScriptCarrierLookup?,
+    ): CoreLaunch {
         val conf = buildString {
             appendLine("# OpenFlux Desktop: ${profile.name}")
             appendLine("[Interface]")
@@ -69,6 +88,13 @@ object CoreConfig {
                         appendLine("Token = ${confValue(spec.value)}")
                         appendLine("UID = ${confValue(spec.uid)}")
                     }
+                }
+                if (spec.type == TransportType.SCRIPT) {
+                    val carrier = scriptCarrier(spec.scriptId)
+                        ?: error("Скрипт-транспорт «${spec.scriptId}» не найден (удалён или не импортирован на этом устройстве)")
+                    appendLine("Path = ${confValue(carrier.path)}")
+                    appendLine("Pubkey = ${confValue(carrier.pubkeyHex)}")
+                    appendLine("Name = ${confValue(carrier.name)}")
                 }
             }
             // The exit listens for direct only when the profile has it; its

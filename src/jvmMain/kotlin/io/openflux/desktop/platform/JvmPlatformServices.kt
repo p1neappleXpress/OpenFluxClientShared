@@ -10,6 +10,7 @@ import com.google.zxing.RGBLuminanceSource
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import io.openflux.desktop.core.CoreBinary
 import io.openflux.desktop.service.PlatformServices
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -30,12 +31,15 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.time.Duration
+import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
 
 class JvmPlatformServices(
     override val appVersion: String,
+    private val binary: CoreBinary,
     private val coreVersionProvider: () -> String,
 ) : PlatformServices {
     private val os = System.getProperty("os.name").lowercase()
@@ -159,12 +163,77 @@ class JvmPlatformServices(
         return buffered
     }
 
+    // --- JS script transports ---
+    //
+    // Unlike the mobile apps (gomobile, in-process), desktop has only the
+    // compiled core binary: inspectTransport shells out to its
+    // --inspect-script subcommand (transport/script.InspectTrust under
+    // the hood - the one place that logic lives, see core/script_cli.go).
+    // scriptFingerprint needs no process at all: SHA-256 of a public key
+    // is safe to compute here directly, same hash every platform shows
+    // the user to compare out of band.
+
+    override val officialScriptKey: String get() = OFFICIAL_SCRIPT_KEY
+
+    override fun inspectTransport(data: ByteArray, sig: ByteArray, pubkeyHex: String): String {
+        val core = binary.bundled()
+            ?: return """{"ok":false,"signature":"unverified","error":"ядро не найдено"}"""
+        return runInspectScript(core, data, sig, pubkeyHex)
+    }
+
+    override fun scriptFingerprint(pubkeyHex: String): String = runCatching {
+        val key = pubkeyHex.trim().replace(" ", "")
+        val bytes = ByteArray(key.length / 2) { i -> ((hexDigit(key[i * 2]) shl 4) or hexDigit(key[i * 2 + 1])).toByte() }
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+    }.getOrDefault("")
+
+    private fun hexDigit(c: Char): Int = Character.digit(c, 16).also { require(it >= 0) { "bad hex digit $c" } }
+
+    override suspend fun fetchBytes(url: String): ByteArray? = withContext(Dispatchers.IO) {
+        runCatching {
+            val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8)).followRedirects(HttpClient.Redirect.NORMAL).build()
+            val request = HttpRequest.newBuilder(URI(url)).header("User-Agent", "OpenFlux-Desktop").timeout(Duration.ofSeconds(20)).build()
+            http.send(request, HttpResponse.BodyHandlers.ofByteArray()).body()
+        }.getOrNull()
+    }
+
+    override suspend fun readBytes(pathOrUri: String): ByteArray? = withContext(Dispatchers.IO) {
+        runCatching { File(pathOrUri).readBytes() }.getOrNull()
+    }
+
+    /** Runs `<core> --inspect-script --data=<f> [--sig=<f>] [--pubkey=<hex>]`, returning its JSON stdout as-is. */
+    private fun runInspectScript(core: File, data: ByteArray, sig: ByteArray, pubkeyHex: String): String {
+        val dataFile = File.createTempFile("ofx-script-", ".bin")
+        val sigFile = if (sig.isNotEmpty()) File.createTempFile("ofx-script-", ".sig") else null
+        return try {
+            dataFile.writeBytes(data)
+            sigFile?.writeBytes(sig)
+            val args = buildList {
+                add(core.absolutePath); add("--inspect-script"); add("--data=${dataFile.absolutePath}")
+                sigFile?.let { add("--sig=${it.absolutePath}") }
+                if (pubkeyHex.isNotBlank()) add("--pubkey=${pubkeyHex.trim()}")
+            }
+            val process = ProcessBuilder(args).redirectErrorStream(false).start()
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor(10, TimeUnit.SECONDS)
+            output.trim().ifBlank { """{"ok":false,"signature":"unverified","error":"ядро не ответило"}""" }
+        } catch (e: Exception) {
+            val msg = (e.message ?: "неизвестная ошибка").replace("\\", "\\\\").replace("\"", "\\\"")
+            """{"ok":false,"signature":"unverified","error":"$msg"}"""
+        } finally {
+            dataFile.delete()
+            sigFile?.delete()
+        }
+    }
+
     companion object {
         /** Where the desktop releases are published, tagged v1.2.3. */
         const val RELEASE_REPO = "p1neappleXpress/OpenFluxDesktop"
         const val DESKTOP_TAG_PREFIX = "v"
         /** Nightly test builds are tagged nightly-<date>-<commit>, as prereleases. */
         const val NIGHTLY_TAG_PREFIX = "nightly-"
+        /** The OpenFlux project's own script-signing key - see transport/script.OfficialKeyHex. Public; safe to duplicate. */
+        const val OFFICIAL_SCRIPT_KEY = "d8bf9c958b994c2faab886cade5f28213f254911f87abe5e34756a289ae91354"
     }
 }
 

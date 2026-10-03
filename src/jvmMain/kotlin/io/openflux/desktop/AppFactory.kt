@@ -4,6 +4,7 @@ import io.openflux.desktop.core.CliCoreLinks
 import io.openflux.desktop.core.CoreBinary
 import io.openflux.desktop.data.AppDirs
 import io.openflux.desktop.core.CoreConnectionService
+import io.openflux.desktop.core.DesktopScriptRepository
 import io.openflux.desktop.data.FileProfileRepository
 import io.openflux.desktop.data.FileSettingsRepository
 import io.openflux.desktop.model.CoreShareLinkCodec
@@ -22,16 +23,19 @@ fun createAppContainer(appVersion: String): AppContainer {
     val settings = FileSettingsRepository(AppDirs.config)
     val binary = CoreBinary()
     val phpHosting = PhpHostingService(CorePhpTransport(settings, binary), clock = System::currentTimeMillis)
+    val platform = JvmPlatformServices(appVersion, binary) { binary.version() }
+    val scripts = DesktopScriptRepository(platform)
     return AppContainer(
         profiles = FileProfileRepository(AppDirs.config),
         settings = settings,
         // Connecting a profile made by the "без сервера" wizard first asks its node on the hosting to run.
         connection = NodeKeepingConnection(
-            CoreConnectionService(settings, binary), phpHosting, CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            CoreConnectionService(settings, binary, scripts), phpHosting, CoroutineScope(SupervisorJob() + Dispatchers.Default),
         ),
-        platform = JvmPlatformServices(appVersion) { binary.version() },
+        platform = platform,
         shareCodec = CoreShareLinkCodec(CliCoreLinks(settings, binary)),
         nodeWizard = CoreNodeWizard(settings, binary),
         phpHosting = phpHosting,
+        scripts = scripts,
     )
 }

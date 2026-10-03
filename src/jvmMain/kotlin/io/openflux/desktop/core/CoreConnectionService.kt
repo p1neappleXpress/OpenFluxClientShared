@@ -55,6 +55,7 @@ import java.util.concurrent.atomic.AtomicLong
 class CoreConnectionService(
     private val settings: SettingsRepository,
     private val binary: CoreBinary,
+    private val scripts: DesktopScriptRepository,
 ) : ConnectionService {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val isWindows = System.getProperty("os.name").lowercase().contains("win")
@@ -176,7 +177,7 @@ class CoreConnectionService(
                 cookieStore = File(AppDirs.config, "cookies/$tag.json").also { it.parentFile.mkdirs() }.absolutePath,
                 ipcSocket = ipcSocket?.absolutePath,
             )
-            val launch = CoreConfig.build(profile, current, paths)
+            val launch = CoreConfig.build(profile, current, paths, scripts::carrier)
             if (launch.conf != null) {
                 confFile.writeText(launch.conf)
                 restrictToOwner(confFile)
