@@ -12,6 +12,8 @@ import io.openflux.desktop.model.NodePlan
 import io.openflux.desktop.model.NodeTransport
 import io.openflux.desktop.model.ServerProbe
 import io.openflux.desktop.model.SshTarget
+import io.openflux.desktop.model.InstalledScript
+import io.openflux.desktop.model.ScriptSource
 import io.openflux.desktop.model.Profile
 import io.openflux.desktop.model.ShareLinkCodec
 import io.openflux.desktop.model.TrafficStats
@@ -30,6 +32,43 @@ interface ProfileRepository {
 interface SettingsRepository {
     val settings: StateFlow<AppSettings>
     fun update(transform: (AppSettings) -> AppSettings)
+}
+
+/** Installed JS (goja) script transports. Writes persist before the flow updates. */
+interface ScriptRepository {
+    val scripts: StateFlow<List<InstalledScript>>
+    fun upsert(script: InstalledScript)
+    fun delete(id: String)
+    fun setEnabled(id: String, enabled: Boolean)
+    fun byId(id: String): InstalledScript? = scripts.value.firstOrNull { it.id == id }
+
+    /**
+     * Verifies a downloaded transport ([data] a .flux or bare .js, [sig] the
+     * detached signature for a .js) against [pubkeyHex] and, only if the
+     * signature is valid, stores and records it. Throws with a reason the
+     * trust dialog shows. Unsupported on platforms without script transports.
+     */
+    fun install(
+        data: ByteArray,
+        sig: ByteArray,
+        pubkeyHex: String,
+        source: ScriptSource,
+        origin: String,
+        now: Long,
+    ): InstalledScript = throw UnsupportedOperationException("script transports not supported here")
+}
+
+/** A no-op registry so platforms that don't ship script transports still build. */
+class InMemoryScriptRepository : ScriptRepository {
+    private val _scripts = MutableStateFlow<List<InstalledScript>>(emptyList())
+    override val scripts: StateFlow<List<InstalledScript>> = _scripts
+    override fun upsert(script: InstalledScript) {
+        _scripts.value = _scripts.value.filterNot { it.id == script.id } + script
+    }
+    override fun delete(id: String) { _scripts.value = _scripts.value.filterNot { it.id == id } }
+    override fun setEnabled(id: String, enabled: Boolean) {
+        _scripts.value = _scripts.value.map { if (it.id == id) it.copy(enabled = enabled) else it }
+    }
 }
 
 /** Runs the OpenFlux core for one profile at a time. */
@@ -114,6 +153,30 @@ interface PlatformServices {
      * build), by publication date; null when unknown or not supported.
      */
     suspend fun latestNightly(): String? = null
+
+    // --- JS script transports (defaults keep platforms without them building) ---
+
+    /** The OpenFlux first-party script signing key (hex); "" when scripts aren't supported. */
+    val officialScriptKey: String get() = ""
+
+    /**
+     * Reads a downloaded transport and returns the core's JSON trust report
+     * (name, version, params, signature, fingerprint, official) without
+     * running it. data is a .flux package or a bare .js; sig is the detached
+     * signature for a bare .js (empty for .flux); pubkeyHex is the candidate
+     * author key or "".
+     */
+    fun inspectTransport(data: ByteArray, sig: ByteArray, pubkeyHex: String): String =
+        """{"ok":false,"error":"script transports not supported on this platform"}"""
+
+    /** SHA-256 (hex) of an author public key, "" if it can't be decoded. */
+    fun scriptFingerprint(pubkeyHex: String): String = ""
+
+    /** GETs a URL (adding a script from GitHub), null on failure. */
+    suspend fun fetchBytes(url: String): ByteArray? = null
+
+    /** Reads a picked file (path or content URI) as bytes, null on failure. */
+    suspend fun readBytes(pathOrUri: String): ByteArray? = null
 }
 
 /**
@@ -170,6 +233,8 @@ class AppContainer(
     val nodeWizard: NodeWizardService,
     /** The "без сервера" wizard's steps: a PHP node on an ordinary web host, put there over FTP by the core. */
     val phpHosting: PhpHostingService = PhpHostingService(),
+    /** Installed JS script transports; in-memory no-op unless the platform ships one. */
+    val scripts: ScriptRepository = InMemoryScriptRepository(),
 ) {
     /** An `openflux://` link opened from outside (a scanned code, a chat); the Profiles screen imports it. */
     val incomingLink = MutableStateFlow<String?>(null)

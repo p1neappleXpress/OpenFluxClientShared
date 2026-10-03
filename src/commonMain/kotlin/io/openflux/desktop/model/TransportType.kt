@@ -45,13 +45,24 @@ enum class TransportType(
 
     @SerialName("direct")
     DIRECT("direct", "Direct (TCP до ноды)", "Direct", ValueKind.Address,
-        "host:port", "ic_link");
+        "host:port", "ic_link"),
+
+    /**
+     * A JS (goja) script transport. One enum member stands for every installed
+     * script; which one a carrier uses is its [ExtraTransport.scriptId]. Runs
+     * through the Session path so its on-disk path and pinned author key reach
+     * the core as carrier params. The value field holds the script's primary
+     * input (its first info().param, usually a document URL).
+     */
+    @SerialName("script")
+    SCRIPT("script", "JS-транспорт", "JS", ValueKind.DocumentUrl,
+        "см. параметры транспорта", "ic_code");
 
     /** Whether an `openflux://` link can carry it (MAX tokens are per account). */
-    val shareable: Boolean get() = this != ONEME
+    val shareable: Boolean get() = this != ONEME && this != SCRIPT
 
-    /** Direct needs an authenticated session: it has no document to meet in. */
-    val sessionOnly: Boolean get() = this == DIRECT
+    /** Needs an authenticated Session: no document to meet in, or (script) params ride the Session specs. */
+    val sessionOnly: Boolean get() = this == DIRECT || this == SCRIPT
 
     companion object {
         fun fromCli(name: String): TransportType? = entries.firstOrNull { it.cliName == name }

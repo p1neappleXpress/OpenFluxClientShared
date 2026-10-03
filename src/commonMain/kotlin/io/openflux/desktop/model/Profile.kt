@@ -13,6 +13,8 @@ data class ExtraTransport(
     val value: String = "",
     val uid: String = "",
     val priority: Int = 50,
+    /** Which installed script this carrier uses, when [type] is SCRIPT. */
+    val scriptId: String = "",
 )
 
 /**
@@ -31,6 +33,8 @@ data class Profile(
     val transport: TransportType = TransportType.VYANDEX,
     /** Document URL, host:port for direct, MAX Web token for oneme. */
     val value: String = "",
+    /** Which installed script the main transport uses, when [transport] is SCRIPT. */
+    val scriptId: String = "",
     /** MAX user id (oneme only). */
     val uid: String = "",
     val secret: String = "",
@@ -53,7 +57,7 @@ data class Profile(
 ) {
     /** Every carrier of the profile, main first. */
     val carriers: List<ExtraTransport>
-        get() = listOf(ExtraTransport(transport, value, uid, priority)) + if (session) extras else emptyList()
+        get() = listOf(ExtraTransport(transport, value, uid, priority, scriptId)) + if (session) extras else emptyList()
 
     val summary: String
         get() = when {
@@ -107,6 +111,7 @@ data class Profile(
                 value = carrier.value.trim(),
                 uid = carrier.uid.trim(),
                 priority = carrier.priority,
+                scriptId = carrier.scriptId,
             )
         }
     }
@@ -152,6 +157,11 @@ data class Profile(
 
         fun carrierProblem(carrier: ExtraTransport): String? {
             val value = carrier.value.trim()
+            // A script transport validates its own params in the engine; here
+            // just make sure one was actually chosen.
+            if (carrier.type == TransportType.SCRIPT) {
+                return if (carrier.scriptId.isBlank()) "выберите скрипт-транспорт" else null
+            }
             return when (carrier.type.kind) {
                 ValueKind.DocumentUrl -> when {
                     // Cups.online with no rooms is valid: the node generates its own
@@ -220,4 +230,5 @@ data class SessionSpec(
     val value: String,
     val uid: String,
     val priority: Int,
+    val scriptId: String = "",
 )

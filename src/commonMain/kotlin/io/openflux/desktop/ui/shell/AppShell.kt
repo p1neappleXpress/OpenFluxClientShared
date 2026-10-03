@@ -100,7 +100,7 @@ class ShellController {
 
 val LocalShell = staticCompositionLocalOf { ShellController() }
 
-val AppTabs: List<Tab> = listOf(HomeTab, ProfilesTab, LogsTab, SettingsTab)
+val AppTabs: List<Tab> = listOf(HomeTab, ProfilesTab, io.openflux.desktop.ui.scripts.ScriptsTab, LogsTab, SettingsTab)
 
 @Composable
 fun OpenFluxApp(container: AppContainer, scrollbars: Scrollbars, shortcuts: Shortcuts, browsers: BrowserViews = NoBrowserViews) {
