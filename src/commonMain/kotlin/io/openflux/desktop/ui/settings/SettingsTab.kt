@@ -48,6 +48,7 @@ import io.openflux.desktop.model.AppSettings
 import io.openflux.desktop.model.ConnectionMode
 import io.openflux.desktop.model.CoreSource
 import io.openflux.desktop.model.ThemeMode
+import io.openflux.desktop.model.UpdateChannel
 import io.openflux.desktop.model.isActive
 import io.openflux.desktop.service.AppContainer
 import io.openflux.desktop.service.LocalAppContainer
@@ -495,13 +496,15 @@ private fun InterfaceSettings(model: SettingsScreenModel) {
 private fun AboutSettings(model: SettingsScreenModel) {
     val platform = model.container.platform
     val scope = rememberCoroutineScope()
+    val settings by model.container.settings.settings.collectAsState()
+    val nightly = settings.updateChannel == UpdateChannel.Nightly
     AppCard(padding = 0.dp) {
         KeyValueRow("Версия приложения", platform.appVersion)
         HorizontalRule()
         KeyValueRow("Ядро OpenFlux", platform.coreVersion)
         HorizontalRule()
         KeyValueRow(
-            "Последний выпуск",
+            if (nightly) "Последняя ночная или основная" else "Последний выпуск",
             when {
                 model.checkingRelease -> "проверяю…"
                 model.latestRelease != null -> model.latestRelease!!
@@ -509,10 +512,20 @@ private fun AboutSettings(model: SettingsScreenModel) {
             },
         )
     }
+    SwitchRow(
+        "Ночные сборки",
+        "Тестовые версии, выходят чаще основных: свежее, но возможны сбои. Выключено — только основные выпуски",
+        nightly,
+        { v ->
+            model.update { it.copy(updateChannel = if (v) UpdateChannel.Nightly else UpdateChannel.Stable) }
+            model.latestRelease = null
+        },
+    )
     AppButton("Проверить обновления", {
         model.checkingRelease = true
         scope.launch {
-            model.latestRelease = platform.latestRelease() ?: "не найден"
+            val found = if (nightly) platform.latestNightly() ?: platform.latestRelease() else platform.latestRelease()
+            model.latestRelease = found ?: "не найден"
             model.checkingRelease = false
         }
     }, style = ButtonStyle.Secondary)

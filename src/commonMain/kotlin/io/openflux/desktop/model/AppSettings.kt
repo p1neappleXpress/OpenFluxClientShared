@@ -5,6 +5,10 @@ import kotlinx.serialization.Serializable
 @Serializable
 enum class ThemeMode(val label: String) { System("Как в системе"), Light("Светлая"), Dark("Тёмная") }
 
+/** Which releases "check for updates" looks at: the main ones, or also the nightly test builds. */
+@Serializable
+enum class UpdateChannel(val label: String) { Stable("Основной"), Nightly("Ночной") }
+
 /** How this computer takes part: a client of an exit, or an exit itself. */
 @Serializable
 enum class ConnectionMode(val label: String, val description: String) {
@@ -59,6 +63,8 @@ data class AppSettings(
     /** Hide document URLs and keys in the log view. */
     val maskSensitive: Boolean = true,
     val closeToTray: Boolean = true,
+    /** Release channel the update check follows. */
+    val updateChannel: UpdateChannel = UpdateChannel.Stable,
     /** Exit mode: address clients dial for direct ("" = the core's guess). */
     val exitShareHost: String = "",
     /** Exit mode: TCP port for the direct transport. */

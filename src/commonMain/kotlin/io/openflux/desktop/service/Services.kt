@@ -109,6 +109,11 @@ interface PlatformServices {
     fun now(): Long
     /** Newest app release tag on GitHub, null when unknown. */
     suspend fun latestRelease(): String?
+    /**
+     * Newest release of either channel (a main `v*` or a `nightly-*` test
+     * build), by publication date; null when unknown or not supported.
+     */
+    suspend fun latestNightly(): String? = null
 }
 
 /**

@@ -115,19 +115,28 @@ class JvmPlatformServices(
     override fun now(): Long = System.currentTimeMillis()
 
     override suspend fun latestRelease(): String? = withContext(Dispatchers.IO) {
-        runCatching {
-            // GitHub answers a renamed repository with a redirect.
-            val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8))
-                .followRedirects(HttpClient.Redirect.NORMAL).build()
-            val request = HttpRequest.newBuilder(URI("https://api.github.com/repos/$RELEASE_REPO/releases?per_page=20"))
-                .header("User-Agent", "OpenFlux-Desktop").timeout(Duration.ofSeconds(10)).build()
-            val body = http.send(request, HttpResponse.BodyHandlers.ofString()).body()
-            Json.parseToJsonElement(body).jsonArray
-                .map { it.jsonObject["tag_name"]?.jsonPrimitive?.content.orEmpty() }
-                .firstOrNull { it.startsWith(DESKTOP_TAG_PREFIX) }
-                ?.removePrefix(DESKTOP_TAG_PREFIX)
-        }.getOrNull()
+        releaseTags().firstOrNull { it.startsWith(DESKTOP_TAG_PREFIX) }?.removePrefix(DESKTOP_TAG_PREFIX)
     }
+
+    /** The newest release of either channel; GitHub lists them newest first. */
+    override suspend fun latestNightly(): String? = withContext(Dispatchers.IO) {
+        releaseTags().firstOrNull { it.startsWith(DESKTOP_TAG_PREFIX) || it.startsWith(NIGHTLY_TAG_PREFIX) }
+            ?.removePrefix(DESKTOP_TAG_PREFIX)
+    }
+
+    /** Tags of the published (non-draft) releases, newest first; empty when offline. */
+    private fun releaseTags(): List<String> = runCatching {
+        // GitHub answers a renamed repository with a redirect.
+        val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8))
+            .followRedirects(HttpClient.Redirect.NORMAL).build()
+        val request = HttpRequest.newBuilder(URI("https://api.github.com/repos/$RELEASE_REPO/releases?per_page=30"))
+            .header("User-Agent", "OpenFlux-Desktop").timeout(Duration.ofSeconds(10)).build()
+        val body = http.send(request, HttpResponse.BodyHandlers.ofString()).body()
+        Json.parseToJsonElement(body).jsonArray
+            .map { it.jsonObject }
+            .filter { it["draft"]?.jsonPrimitive?.content != "true" }
+            .map { it["tag_name"]?.jsonPrimitive?.content.orEmpty() }
+    }.getOrDefault(emptyList())
 
     private fun decodeQr(image: BufferedImage): String? {
         val pixels = IntArray(image.width * image.height)
@@ -154,6 +163,8 @@ class JvmPlatformServices(
         /** Where the desktop releases are published, tagged v1.2.3. */
         const val RELEASE_REPO = "p1neappleXpress/OpenFluxDesktop"
         const val DESKTOP_TAG_PREFIX = "v"
+        /** Nightly test builds are tagged nightly-<date>-<commit>, as prereleases. */
+        const val NIGHTLY_TAG_PREFIX = "nightly-"
     }
 }
 
