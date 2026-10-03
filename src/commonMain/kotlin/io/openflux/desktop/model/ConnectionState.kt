@@ -62,12 +62,19 @@ sealed interface ExitAddress {
     data class Unavailable(val reason: String) : ExitAddress
 }
 
-/** A Yandex check the core asks the user to pass in a browser. */
+/**
+ * A check or setup step the core asks the user to pass in a browser: a real
+ * site's [url] (Yandex et al.), or a script transport's own [html] setup
+ * page (see js/template_html.html in the core) - never both. [url] is ""
+ * when [html] is set.
+ */
 data class CaptchaPrompt(
     val url: String,
     val reason: String,
     /** The check belongs to the exit node: the browser goes through its address. */
     val remote: Boolean,
+    /** A script transport's own setup/login page, inlined instead of a URL. */
+    val html: String? = null,
     val error: String = "",
     val busy: Boolean = false,
     /** The built-in browser getting ready (first-run download). */

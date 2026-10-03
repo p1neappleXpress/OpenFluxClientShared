@@ -23,6 +23,7 @@ import io.openflux.desktop.model.isActive
 import io.openflux.desktop.platform.WindowsSystemProxy
 import io.openflux.desktop.service.ConnectionService
 import io.openflux.desktop.service.SettingsRepository
+import io.openflux.desktop.web.BuiltInBrowser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,6 +35,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.file.Files
@@ -127,6 +132,9 @@ class CoreConnectionService(
         }
         scope.launch {
             settings.settings.distinctUntilChangedBy { it.systemProxy }.collect { applySystemProxy() }
+        }
+        scope.launch {
+            BuiltInBrowser.submissions.collect { json -> onSetupSubmission(json) }
         }
     }
 
@@ -508,8 +516,15 @@ class CoreConnectionService(
     private fun onCaptchaRequest(request: IpcCookiesRequest) {
         if (pendingCaptcha == request) return
         pendingCaptcha = request
-        log(LogLevel.Warning, if (request.remote) "Нода просит пройти проверку Яндекса" else "Яндекс просит пройти проверку")
-        _captcha.value = CaptchaPrompt(request.url, request.reason, request.remote)
+        log(
+            LogLevel.Warning,
+            when {
+                request.html.isNotEmpty() -> "Транспорт «${request.transport}» просит настройку"
+                request.remote -> "Нода просит пройти проверку Яндекса"
+                else -> "Яндекс просит пройти проверку"
+            },
+        )
+        _captcha.value = CaptchaPrompt(request.url, request.reason, request.remote, html = request.html.ifEmpty { null })
         openCaptcha()
     }
 
@@ -521,9 +536,40 @@ class CoreConnectionService(
                 captchaBrowser.open(request) { step -> _captcha.update { it?.copy(progress = step) } }
             }.exceptionOrNull()
             _captcha.update { it?.copy(error = error?.message.orEmpty(), progress = "") }
-            if (error == null && captchaBrowser.awaitPassed() && pendingCaptcha == request) {
+            // A script's own setup page submits itself (onSetupSubmission); only
+            // a real check can pass silently and needs this nudge.
+            if (error == null && request.html.isEmpty() && captchaBrowser.awaitPassed() && pendingCaptcha == request) {
                 log(LogLevel.Info, "Страница Яндекса открылась без проверки, передаю cookies")
                 submitCaptcha()
+            }
+        }
+    }
+
+    /**
+     * window.openfluxSubmit(payload) from a script's own setup page
+     * (BuiltInBrowser.submissions). payload is either flat {key: value} or
+     * {client: {...}, node: {...}} (see the node-config-scope design); only
+     * the client half is applied here today - node delivery during a node
+     * deploy is a separate, not yet wired, path.
+     */
+    private fun onSetupSubmission(json: String) {
+        val request = pendingCaptcha ?: return
+        if (request.html.isEmpty() || _captcha.value?.busy == true) return
+        _captcha.update { it?.copy(busy = true, error = "") }
+        scope.launch {
+            try {
+                val root = Json.parseToJsonElement(json).jsonObject
+                val scoped = (root["client"] as? JsonObject) ?: root
+                val jar = scoped.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.let { k to it.content } }.toMap()
+                require(jar.isNotEmpty()) { "Страница настройки не передала данных" }
+                val ipc = synchronized(lock) { run }?.ipc ?: throw IllegalStateException("Ядро не на связи")
+                ipc.offerCookies(IpcCookiesOffer(request.transport, jar, remote = request.remote))
+                log(LogLevel.Success, "Настройка передана транспорту «${request.transport}»")
+                pendingCaptcha = null
+                _captcha.value = null
+                captchaBrowser.close()
+            } catch (e: Exception) {
+                _captcha.update { it?.copy(busy = false, error = e.message ?: "Не удалось передать настройку") }
             }
         }
     }

@@ -21,8 +21,13 @@ class CaptchaBrowser : AutoCloseable {
     val page: StateFlow<BrowserPage?> = _page.asStateFlow()
 
     suspend fun open(request: IpcCookiesRequest, onStep: (String) -> Unit) {
-        require(URI(request.url).scheme == "https") { "The check URL must use HTTPS" }
         close()
+        if (request.html.isNotEmpty()) {
+            // A script's own setup page: inline, loopback-only, no cookies involved.
+            _page.value = BuiltInBrowser.openHtml(request.html, onStep)
+            return
+        }
+        require(URI(request.url).scheme == "https") { "The check URL must use HTTPS" }
         val upstream = if (request.remote) {
             request.proxy.also { require(BrowserProxy.isLoopback(it)) { "Проверке ноды нужен локальный прокси" } }
         } else null

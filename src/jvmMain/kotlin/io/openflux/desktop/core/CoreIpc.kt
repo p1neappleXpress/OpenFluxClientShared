@@ -14,11 +14,13 @@ import java.nio.channels.Channels
 import java.nio.channels.SocketChannel
 import java.nio.file.Path
 
-/** The core asks for a passed Yandex check (MsgCookiesRequest). */
+/** The core asks for a passed Yandex check, or a script's own setup page (MsgCookiesRequest). */
 @Serializable
 data class IpcCookiesRequest(
     val transport: String,
     val url: String,
+    /** A script transport's own setup/login page, sent instead of [url]; "" for every native transport. */
+    val html: String = "",
     val reason: String = "",
     val remote: Boolean = false,
     val proxy: String = "",
