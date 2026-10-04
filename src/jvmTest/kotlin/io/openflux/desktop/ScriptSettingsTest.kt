@@ -225,4 +225,34 @@ class ScriptSettingsTest {
         assertEquals(host.opened.size - 1, host.closed.size)
         assertTrue(host.opened.last() === service.state.value?.page)
     }
+
+    @Test
+    fun aScriptCarrierIsNamedByItsScriptNotJustScript() {
+        val profile = Profile(
+            id = "p", name = "P", transport = TransportType.BOARDS, value = "https://x/board/1", session = true,
+            secret = "0123456789abcdef0123456789abcdef",
+            extras = listOf(
+                ExtraTransport(TransportType.SCRIPT, "https://doc/a", priority = 60, scriptId = "my-transport"),
+                ExtraTransport(TransportType.SCRIPT, "https://doc/b", priority = 50, scriptId = "other"),
+                ExtraTransport(TransportType.BOARDS, "https://x/board/2", priority = 40),
+            ),
+        )
+        val scripts = listOf(
+            script(ScriptParam("url")).copy(id = "my-transport", name = "Мой транспорт"),
+            script(ScriptParam("url")).copy(id = "other", name = "Другой"),
+        )
+        // the core calls them boards, script, script-2, boards-2
+        assertEquals("Board", profile.carrierLabel("boards", scripts))
+        assertEquals("Мой транспорт", profile.carrierLabel("script", scripts))
+        assertEquals("Другой", profile.carrierLabel("script-2", scripts))
+        assertEquals("Board 2", profile.carrierLabel("boards-2", scripts))
+        assertEquals("Board + Мой транспорт", profile.carrierLabels(listOf("boards", "script"), scripts))
+        // a script that is no longer installed is still named, by its id, not "script"
+        assertEquals("other", profile.carrierLabel("script-2", emptyList()))
+        // a name the profile does not know falls back to the generic label
+        assertEquals("Volga", Profile(
+            id = "q", name = "Q", transport = TransportType.VYANDEX, value = "https://docs.yandex.ru/edit/d/x", session = true,
+            secret = "0123456789abcdef0123456789abcdef",
+        ).carrierLabel("vyandex", emptyList()))
+    }
 }
