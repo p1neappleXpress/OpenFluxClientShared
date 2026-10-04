@@ -63,12 +63,10 @@ import io.openflux.desktop.ui.components.AppButton
 import io.openflux.desktop.ui.components.AppCard
 import io.openflux.desktop.ui.components.AppIconButton
 import io.openflux.desktop.ui.components.AppIcons
-import io.openflux.desktop.ui.components.AppMenu
 import io.openflux.desktop.ui.components.AppTextField
 import io.openflux.desktop.ui.components.Banner
 import io.openflux.desktop.ui.components.ButtonStyle
 import io.openflux.desktop.ui.components.LocalToaster
-import io.openflux.desktop.ui.components.MenuAction
 import io.openflux.desktop.ui.components.SectionLabel
 import io.openflux.desktop.ui.components.Segmented
 import io.openflux.desktop.ui.components.TextAction
@@ -338,10 +336,18 @@ private fun TransportDropdown(
             Text(label, style = AppTheme.typography.body, color = AppTheme.colors.text, modifier = Modifier.weight(1f))
             Icon(Icons.Rounded.ExpandMore, "Выбрать транспорт", tint = AppTheme.colors.textSecondary)
         }
-        // Script transports stand on equal footing with native ones (shown only
-        // outside stream mode, which is the PHP-node carriers).
-        val scriptItems = if (!stream) scripts.map { s -> MenuAction("JS · ${s.name}", { onSelect(TransportType.SCRIPT, s.id) }) } else emptyList()
-        AppMenu(open, { open = false }, native.map { type -> MenuAction(type.label, { onSelect(type, "") }) } + scriptItems)
+        if (open) {
+            TransportPickerDialog(
+                selected = selected,
+                selectedScriptId = selectedScriptId,
+                native = native,
+                // Script transports stand on equal footing with native ones (shown only
+                // outside stream mode, which is the PHP-node carriers).
+                scripts = if (stream) emptyList() else scripts,
+                onSelect = { type, sid -> open = false; onSelect(type, sid) },
+                onDismiss = { open = false },
+            )
+        }
     }
 }
 
