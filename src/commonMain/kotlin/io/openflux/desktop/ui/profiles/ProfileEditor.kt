@@ -75,6 +75,9 @@ import io.openflux.desktop.ui.components.appClickable
 import io.openflux.desktop.ui.theme.AppTheme
 import org.jetbrains.compose.resources.painterResource
 
+/** A key shorter than this still works, but is within reach of guessing by whoever carries the traffic. */
+private const val WEAK_SECRET = 24
+
 /** How a profile connects: one carrier, several at once, or a PHP node on a web hosting. */
 private enum class EditMode(val label: String) { Classic("Обычный"), Session("Session"), Stream("Без сервера") }
 
@@ -230,6 +233,16 @@ fun ProfileEditor(model: ProfilesScreenModel, state: EditorState, onBack: (() ->
                         helper = "Тот же ключ, что у ноды. Не короче ${Profile.MIN_SECRET} символов.",
                     )
                     TextAction("Сгенерировать безопасный ключ", { model.updateDraft { it.copy(secret = model.newSecret()) } })
+                    when {
+                        draft.secret.isBlank() && !draft.session -> Banner(
+                            "Без ключа трафик идёт через сервис без шифрования: его видит владелец площадки (Яндекс, Mail.ru и т. п.). Задайте ключ, как на ноде.",
+                            Tone.Warning,
+                        )
+                        draft.secret.isNotBlank() && draft.secret.length < WEAK_SECRET -> Banner(
+                            "Короткий ключ можно подобрать: площадка видит весь зашифрованный трафик и может перебирать варианты. Надёжнее сгенерированный.",
+                            Tone.Neutral,
+                        )
+                    }
                 }
 
                 if (draft.session) {
