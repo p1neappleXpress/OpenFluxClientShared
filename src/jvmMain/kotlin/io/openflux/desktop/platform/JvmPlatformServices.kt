@@ -228,7 +228,10 @@ class JvmPlatformServices(
         runCatching {
             val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8)).followRedirects(HttpClient.Redirect.NORMAL).build()
             val request = HttpRequest.newBuilder(URI(url)).header("User-Agent", "OpenFlux-Desktop").timeout(Duration.ofSeconds(20)).build()
-            http.send(request, HttpResponse.BodyHandlers.ofByteArray()).body()
+            val response = http.send(request, HttpResponse.BodyHandlers.ofInputStream())
+            // A transport package is a few KB; an answer past the cap is not one.
+            if (response.statusCode() !in 200..299) return@runCatching null
+            response.body().use { body -> body.readNBytes(MAX_FETCH_BYTES + 1).takeIf { it.size <= MAX_FETCH_BYTES } }
         }.getOrNull()
     }
 
@@ -268,6 +271,8 @@ class JvmPlatformServices(
         /** Nightly test builds are tagged nightly-<date>-<commit>, as prereleases. */
         const val NIGHTLY_TAG_PREFIX = "nightly-"
         /** The OpenFlux project's own script-signing key - see transport/script.OfficialKeyHex. Public; safe to duplicate. */
+        /** Largest answer [fetchBytes] returns; a downloaded transport is a few KB. */
+        const val MAX_FETCH_BYTES = 4 * 1024 * 1024
         const val OFFICIAL_SCRIPT_KEY = "d8bf9c958b994c2faab886cade5f28213f254911f87abe5e34756a289ae91354"
     }
 }
