@@ -42,6 +42,19 @@ interface ScriptRepository {
     fun setEnabled(id: String, enabled: Boolean)
     fun byId(id: String): InstalledScript? = scripts.value.firstOrNull { it.id == id }
 
+    /** Folder the packages are in; "" when the platform has none. */
+    val dirPath: String get() = ""
+
+    /**
+     * Re-reads the installed package file and updates its record (after an
+     * update or rollback, or to fill in what an older install lacks: the
+     * package id, wire, update addresses). Returns the record, null if gone.
+     */
+    fun refresh(id: String): InstalledScript? = null
+
+    /** Whether the version this one replaced is still on disk, so a rollback is possible. */
+    fun hasPrevious(id: String): Boolean = false
+
     /**
      * Verifies a downloaded transport ([data] a .flux or bare .js, [sig] the
      * detached signature for a .js) against [pubkeyHex] and, only if the
@@ -177,7 +190,16 @@ interface PlatformServices {
 
     /** Reads a picked file (path or content URI) as bytes, null on failure. */
     suspend fun readBytes(pathOrUri: String): ByteArray? = null
+
+    // The core's script-transport updates; each takes the installed transport as
+    // JSON ({"id","file","version","wire","pubkey","update":[...]}) and returns
+    // the core's JSON report. Blocking (network): call off the UI thread.
+    fun checkScriptUpdate(installedJson: String, channel: String): String = UNSUPPORTED_UPDATE
+    fun applyScriptUpdate(installedJson: String, channel: String, dir: String, allowWireBreak: Boolean): String = UNSUPPORTED_UPDATE
+    fun rollbackScript(installedJson: String, dir: String): String = UNSUPPORTED_UPDATE
 }
+
+const val UNSUPPORTED_UPDATE = """{"status":"error","code":"unsupported"}"""
 
 /**
  * The "Своя нода" wizard's server side: installs an independent exit
@@ -236,6 +258,9 @@ class AppContainer(
     /** Installed JS script transports; in-memory no-op unless the platform ships one. */
     val scripts: ScriptRepository = InMemoryScriptRepository(),
 ) {
+    /** Checks installed script transports for updates and applies them. */
+    val scriptUpdater: ScriptUpdater by lazy { ScriptUpdater(scripts, platform, settings) }
+
     /** An `openflux://` link opened from outside (a scanned code, a chat); the Profiles screen imports it. */
     val incomingLink = MutableStateFlow<String?>(null)
 }

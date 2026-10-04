@@ -51,11 +51,39 @@ data class InstalledScript(
     /** URL or repo reference it was added from, for updates and display. */
     val origin: String = "",
     val addedAt: Long = 0,
+    /** The package's own id (manifest.json), what its update.json is filed under; "" for a bare .js or an install older than this field. */
+    val packageId: String = "",
+    /** Wire-format generation of the installed version (1 when the package does not say). */
+    val wire: Int = 1,
+    /** The https update.json addresses the package's manifest names; empty = nothing to check. */
+    val updateUrls: List<String> = emptyList(),
 ) {
+    /** A signed package that says where its updates are. */
+    val updatable: Boolean get() = fileName.endsWith(".flux") && updateUrls.isNotEmpty()
+
     /** The main input shown on the profile's value field (first param). */
     val primaryParam: ScriptParam? get() = params.firstOrNull()
 
     /** Fingerprint grouped for display: "ab cd ef 12 …". */
     val shortFingerprint: String
         get() = fingerprint.chunked(2).take(4).joinToString(" ") + if (fingerprint.length > 8) " …" else ""
+}
+
+/** What the core's check/apply/rollback answered, as JSON, decoded. Codes only: wording is [ScriptUpdateMessages]'s. */
+@Serializable
+data class ScriptUpdateReport(
+    val status: String = "",
+    val code: String = "",
+    val current: String = "",
+    val latest: String = "",
+    val wire: Int = 0,
+    val wireBreak: Boolean = false,
+    val notes: String = "",
+    val official: Boolean = false,
+    val autoOk: Boolean = false,
+) {
+    val available: Boolean get() = status == "available"
+    val blocked: Boolean get() = status == "blocked"
+    val installed: Boolean get() = status == "installed"
+    val failed: Boolean get() = status == "error"
 }

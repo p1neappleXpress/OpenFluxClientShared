@@ -181,6 +181,41 @@ class JvmPlatformServices(
         return runInspectScript(core, data, sig, pubkeyHex)
     }
 
+    // Script-transport updates: the core's own subcommands (transport/script/update.go),
+    // the same logic the mobile apps call in-process. The installed transport is the
+    // JSON the updater builds; it is turned into flags here.
+    override fun checkScriptUpdate(installedJson: String, channel: String): String =
+        runUpdateCore("--check-script-update", installedJson, channel, null, false)
+
+    override fun applyScriptUpdate(installedJson: String, channel: String, dir: String, allowWireBreak: Boolean): String =
+        runUpdateCore("--apply-script-update", installedJson, channel, dir, allowWireBreak)
+
+    override fun rollbackScript(installedJson: String, dir: String): String =
+        runUpdateCore("--rollback-script", installedJson, "stable", dir, false)
+
+    private fun runUpdateCore(op: String, installedJson: String, channel: String, dir: String?, allowWireBreak: Boolean): String {
+        val core = binary.bundled() ?: return """{"status":"error","code":"unsupported"}"""
+        return try {
+            val o = kotlinx.serialization.json.Json.parseToJsonElement(installedJson) as kotlinx.serialization.json.JsonObject
+            fun str(k: String) = (o[k] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+            val urls = (o["update"] as? kotlinx.serialization.json.JsonArray)?.joinToString(",") { (it as kotlinx.serialization.json.JsonPrimitive).content }.orEmpty()
+            val args = buildList {
+                add(core.absolutePath); add(op)
+                add("--id=${str("id")}"); add("--file=${str("file")}"); add("--version=${str("version")}")
+                add("--wire=${str("wire").ifBlank { "0" }}"); add("--pubkey=${str("pubkey")}")
+                add("--update=$urls"); add("--channel=$channel")
+                if (dir != null) add("--dir=$dir")
+                if (allowWireBreak) add("--allow-wire-break")
+            }
+            val process = ProcessBuilder(args).redirectErrorStream(false).start()
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor(3, TimeUnit.MINUTES)
+            output.trim().ifBlank { """{"status":"error","code":"fetch_failed"}""" }
+        } catch (e: Exception) {
+            """{"status":"error","code":"fetch_failed"}"""
+        }
+    }
+
     override fun scriptFingerprint(pubkeyHex: String): String = runCatching {
         val key = pubkeyHex.trim().replace(" ", "")
         val bytes = ByteArray(key.length / 2) { i -> ((hexDigit(key[i * 2]) shl 4) or hexDigit(key[i * 2 + 1])).toByte() }

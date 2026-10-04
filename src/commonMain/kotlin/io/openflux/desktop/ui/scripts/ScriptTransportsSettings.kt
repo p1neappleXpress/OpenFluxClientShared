@@ -20,6 +20,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,6 +37,8 @@ import cafe.adriel.voyager.navigator.tab.Tab
 import cafe.adriel.voyager.navigator.tab.TabOptions
 import io.openflux.desktop.model.InstalledScript
 import io.openflux.desktop.model.ScriptSource
+import io.openflux.desktop.model.ScriptUpdateMessages
+import io.openflux.desktop.model.ScriptUpdateReport
 import io.openflux.desktop.service.AppContainer
 import io.openflux.desktop.service.LocalAppContainer
 import io.openflux.desktop.ui.components.AppButton
@@ -46,8 +49,11 @@ import io.openflux.desktop.ui.components.AppIcons
 import io.openflux.desktop.ui.components.AppSwitch
 import io.openflux.desktop.ui.components.AppTextField
 import io.openflux.desktop.ui.components.Banner
+import io.openflux.desktop.ui.components.ButtonRow
 import io.openflux.desktop.ui.components.ButtonStyle
 import io.openflux.desktop.ui.components.KeyValueRow
+import io.openflux.desktop.ui.components.LocalToaster
+import io.openflux.desktop.ui.components.TextAction
 import io.openflux.desktop.ui.components.PageHeader
 import io.openflux.desktop.ui.components.SectionLabel
 import io.openflux.desktop.ui.components.Tone
@@ -85,7 +91,16 @@ object ScriptsTab : Tab {
 @Composable
 fun ScriptsScreen(container: AppContainer) {
     val scripts by container.scripts.scripts.collectAsState()
+    val updater = container.scriptUpdater
+    val reports by updater.reports.collectAsState()
+    val busy by updater.busy.collectAsState()
+    val settings by container.settings.settings.collectAsState()
+    val toaster = LocalToaster.current
+    val scope = rememberCoroutineScope()
     var showAdd by remember { mutableStateOf(false) }
+    var updateFor by remember { mutableStateOf<String?>(null) }
+    // A rollback or an update changes the file under the record; re-read what is on disk.
+    var rev by remember { mutableStateOf(0) }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
@@ -94,7 +109,33 @@ fun ScriptsScreen(container: AppContainer) {
         PageHeader("Транспорты", "JS-транспорты на равных правах с обычными — добавляйте свои")
         Spacer(Modifier.height(AppTheme.spacing.xl))
         Column(Modifier.widthIn(max = 720.dp), verticalArrangement = Arrangement.spacedBy(AppTheme.spacing.l)) {
-            AppButton("Импортировать транспорт", { showAdd = true }, leading = Icons.Rounded.Add)
+            ButtonRow {
+                AppButton("Импортировать транспорт", { showAdd = true }, leading = Icons.Rounded.Add)
+                AppButton(
+                    "Проверить обновления",
+                    {
+                        scope.launch {
+                            val n = updater.checkAll()
+                            toaster.show(if (n == 0) "Все транспорты свежие" else "Есть обновления: $n", if (n == 0) Tone.Neutral else Tone.Accent)
+                        }
+                    },
+                    style = ButtonStyle.Secondary,
+                    enabled = busy.isEmpty(),
+                    leading = Icons.Rounded.Refresh,
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Обновлять транспорты OpenFlux сами", style = AppTheme.typography.body, color = AppTheme.colors.text)
+                    Text(
+                        "Только подписанные ключом OpenFlux и без смены формата обмена. Остальные спросят.",
+                        style = AppTheme.typography.caption,
+                        color = AppTheme.colors.textSecondary,
+                    )
+                }
+                Spacer(Modifier.width(AppTheme.spacing.m))
+                AppSwitch(settings.autoUpdateScripts, { on -> container.settings.update { it.copy(autoUpdateScripts = on) } })
+            }
             SectionLabel("Установленные (${scripts.size})")
             if (scripts.isEmpty()) {
                 Banner("Пока нет JS-транспортов. Импортируйте из GitHub или файла — они появятся при выборе транспорта в профиле.", Tone.Neutral)
@@ -102,9 +143,23 @@ fun ScriptsScreen(container: AppContainer) {
                 scripts.forEach { s ->
                     ScriptCard(
                         s,
+                        report = reports[s.id],
+                        busy = s.id in busy,
+                        hasPrevious = rev >= 0 && container.scripts.hasPrevious(s.id),
                         onToggle = { container.scripts.setEnabled(s.id, it) },
                         onDelete = { container.scripts.delete(s.id) },
                         onCopy = { container.platform.setClipboardText(s.fingerprint) },
+                        onUpdate = { updateFor = s.id },
+                        onRollback = {
+                            scope.launch {
+                                val r = updater.rollback(s.id)
+                                rev++
+                                toaster.show(
+                                    if (r.installed) "Вернули версию ${r.latest}" else ScriptUpdateMessages.failure(r.code),
+                                    if (r.installed) Tone.Success else Tone.Danger,
+                                )
+                            }
+                        },
                     )
                 }
             }
@@ -116,10 +171,68 @@ fun ScriptsScreen(container: AppContainer) {
     }
 
     if (showAdd) AddScriptDialog(container) { showAdd = false }
+
+    updateFor?.let { id ->
+        val script = scripts.firstOrNull { it.id == id }
+        val report = reports[id]
+        if (script == null || report == null) updateFor = null else UpdateDialog(
+            script, report,
+            onApply = {
+                updateFor = null
+                scope.launch {
+                    val r = updater.apply(id, allowWireBreak = report.wireBreak)
+                    rev++
+                    toaster.show(
+                        if (r.installed) "${script.name}: теперь ${r.latest}" else ScriptUpdateMessages.failure(r.code),
+                        if (r.installed) Tone.Success else Tone.Danger,
+                    )
+                }
+            },
+            onClose = { updateFor = null },
+        )
+    }
 }
 
 @Composable
-private fun ScriptCard(script: InstalledScript, onToggle: (Boolean) -> Unit, onDelete: () -> Unit, onCopy: () -> Unit) {
+private fun UpdateDialog(script: InstalledScript, report: ScriptUpdateReport, onApply: () -> Unit, onClose: () -> Unit) {
+    AppDialog(
+        title = "Обновление «${script.name}»",
+        onDismiss = onClose,
+        primary = if (report.wireBreak) "Всё равно обновить" else "Обновить",
+        onPrimary = onApply,
+        primaryEnabled = report.available,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(AppTheme.spacing.m)) {
+            Text("${report.current.ifBlank { "—" }}  →  ${report.latest}", style = AppTheme.typography.bodyStrong, color = AppTheme.colors.text)
+            if (report.notes.isNotBlank()) {
+                Text(report.notes, style = AppTheme.typography.body, color = AppTheme.colors.textSecondary)
+            }
+            if (report.wireBreak) {
+                Banner(
+                    "Обновление меняет формат обмена. Нода, к которой вы подключаетесь, должна получить такое же обновление, иначе связи не будет.",
+                    Tone.Warning,
+                )
+            }
+            Banner(
+                if (report.official) "Подписано ключом OpenFlux." else "Подписано тем же ключом автора, что и установленная версия (отпечаток ${script.shortFingerprint}). Другой ключ приложение не приняло бы.",
+                Tone.Neutral,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ScriptCard(
+    script: InstalledScript,
+    report: ScriptUpdateReport?,
+    busy: Boolean,
+    hasPrevious: Boolean,
+    onToggle: (Boolean) -> Unit,
+    onDelete: () -> Unit,
+    onCopy: () -> Unit,
+    onUpdate: () -> Unit,
+    onRollback: () -> Unit,
+) {
     AppCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
@@ -145,6 +258,25 @@ private fun ScriptCard(script: InstalledScript, onToggle: (Boolean) -> Unit, onD
             Spacer(Modifier.width(AppTheme.spacing.s))
             AppIconButton("Удалить", onDelete, icon = Icons.Rounded.Delete)
         }
+        if (report != null && (report.available || report.blocked || report.failed)) {
+            Spacer(Modifier.height(AppTheme.spacing.s))
+            when {
+                report.available -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Доступна ${report.latest}", style = AppTheme.typography.bodyStrong, color = toneColor(Tone.Accent), modifier = Modifier.weight(1f))
+                    AppButton("Обновить", onUpdate, enabled = !busy)
+                }
+                else -> Text(
+                    ScriptUpdateMessages.failure(report.code),
+                    style = AppTheme.typography.caption,
+                    color = toneColor(if (report.blocked) Tone.Warning else Tone.Danger),
+                )
+            }
+        }
+        if (busy) {
+            Spacer(Modifier.height(AppTheme.spacing.xs))
+            Text("Работаем…", style = AppTheme.typography.caption, color = AppTheme.colors.textSecondary)
+        }
+        if (hasPrevious) TextAction("Вернуть предыдущую версию", onRollback, enabled = !busy)
         Spacer(Modifier.height(AppTheme.spacing.s))
         KeyValueRow("Отпечаток ключа", script.shortFingerprint, trailing = {
             AppIconButton("Копировать отпечаток", onCopy, icon = Icons.Rounded.ContentCopy)

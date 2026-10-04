@@ -63,8 +63,12 @@ data class AppSettings(
     /** Hide document URLs and keys in the log view. */
     val maskSensitive: Boolean = true,
     val closeToTray: Boolean = true,
-    /** Release channel the update check follows. */
+    /** Release channel the update check follows (also the channel of script transports' own updates). */
     val updateChannel: UpdateChannel = UpdateChannel.Stable,
+    /** Install an update of a first-party script transport without asking (same wire, same key). Others always ask. */
+    val autoUpdateScripts: Boolean = true,
+    /** When the script transports were last checked for updates (ms since epoch); 0 = never. */
+    val scriptsCheckedAt: Long = 0,
     /** Exit mode: address clients dial for direct ("" = the core's guess). */
     val exitShareHost: String = "",
     /** Exit mode: TCP port for the direct transport. */

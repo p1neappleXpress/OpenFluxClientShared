@@ -105,6 +105,8 @@ val AppTabs: List<Tab> = listOf(HomeTab, ProfilesTab, io.openflux.desktop.ui.scr
 @Composable
 fun OpenFluxApp(container: AppContainer, scrollbars: Scrollbars, shortcuts: Shortcuts, browsers: BrowserViews = NoBrowserViews) {
     val settings by container.settings.settings.collectAsState()
+    // Once a day: look for updates of the installed script transports.
+    LaunchedEffect(Unit) { runCatching { container.scriptUpdater.autoCheck() } }
     val dark = when (settings.theme) {
         ThemeMode.System -> isSystemInDarkTheme()
         ThemeMode.Light -> false

@@ -5,6 +5,7 @@ import io.openflux.desktop.model.InstalledScript
 import io.openflux.desktop.model.ScriptCarrierLookup
 import io.openflux.desktop.model.ScriptParam
 import io.openflux.desktop.model.ScriptSource
+import io.openflux.desktop.model.withTrustReport
 import io.openflux.desktop.service.PlatformServices
 import io.openflux.desktop.service.ScriptRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,6 +47,7 @@ class DesktopScriptRepository(private val platform: PlatformServices) : ScriptRe
         _scripts.value.firstOrNull { it.id == id }?.let { s ->
             File(dir, s.fileName).delete()
             File(dir, s.fileName + ".sig").delete()
+            File(dir, s.fileName + ".prev").delete()
         }
         _scripts.value = _scripts.value.filterNot { it.id == id }
         persist()
@@ -94,9 +96,26 @@ class DesktopScriptRepository(private val platform: PlatformServices) : ScriptRe
             source = source,
             origin = origin,
             addedAt = now,
-        )
+        ).withTrustReport(report)
         upsert(script)
         return script
+    }
+
+    override val dirPath: String get() = dir.absolutePath
+
+    override fun hasPrevious(id: String): Boolean = byId(id)?.let { File(dir, it.fileName + ".prev").exists() } == true
+
+    override fun refresh(id: String): InstalledScript? {
+        val s = byId(id) ?: return null
+        val file = File(dir, s.fileName)
+        if (!file.exists()) return null
+        val sig = File(dir, s.fileName + ".sig").takeIf { it.exists() }?.readBytes() ?: ByteArray(0)
+        val report = runCatching { json.parseToJsonElement(platform.inspectTransport(file.readBytes(), sig, s.pubkeyHex)).jsonObject }.getOrNull() ?: return s
+        if (report["ok"]?.jsonPrimitive?.booleanOrNull != true || report["signature"]?.jsonPrimitive?.contentOrNull != "valid") return s
+        val updated = s.withTrustReport(report)
+        _scripts.value = _scripts.value.map { if (it.id == id) updated else it }
+        persist()
+        return updated
     }
 
     private fun parseParams(el: kotlinx.serialization.json.JsonElement?): List<ScriptParam> {
