@@ -1,6 +1,14 @@
 package io.openflux.desktop.ui.scripts
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import io.openflux.desktop.ui.components.appClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -124,44 +132,59 @@ fun ScriptsScreen(container: AppContainer) {
                     leading = Icons.Rounded.Refresh,
                 )
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Обновлять транспорты OpenFlux сами", style = AppTheme.typography.body, color = AppTheme.colors.text)
-                    Text(
-                        "Только подписанные ключом OpenFlux и без смены формата обмена. Остальные спросят.",
-                        style = AppTheme.typography.caption,
-                        color = AppTheme.colors.textSecondary,
-                    )
-                }
-                Spacer(Modifier.width(AppTheme.spacing.m))
-                AppSwitch(settings.autoUpdateScripts, { on -> container.settings.update { it.copy(autoUpdateScripts = on) } })
+            // OpenFlux's own transports are the common case and rarely need a look: the
+            // ones the user added come first, the rest is folded away below.
+            val (own, added) = scripts.partition { it.official || it.source == ScriptSource.Bundled }
+            val card: @Composable (InstalledScript) -> Unit = { s ->
+                ScriptCard(
+                    s,
+                    report = reports[s.id],
+                    busy = s.id in busy,
+                    hasPrevious = rev >= 0 && container.scripts.hasPrevious(s.id),
+                    onToggle = { container.scripts.setEnabled(s.id, it) },
+                    onDelete = { container.scripts.delete(s.id) },
+                    onCopy = { container.platform.setClipboardText(s.fingerprint) },
+                    onUpdate = { updateFor = s.id },
+                    onRollback = {
+                        scope.launch {
+                            val r = updater.rollback(s.id)
+                            rev++
+                            toaster.show(
+                                if (r.installed) "Вернули версию ${r.latest}" else ScriptUpdateMessages.failure(r.code),
+                                if (r.installed) Tone.Success else Tone.Danger,
+                            )
+                        }
+                    },
+                )
             }
-            SectionLabel("Установленные (${scripts.size})")
-            if (scripts.isEmpty()) {
-                Banner("Пока нет JS-транспортов. Импортируйте из GitHub или файла — они появятся при выборе транспорта в профиле.", Tone.Neutral)
+            SectionLabel("Добавленные (${added.size})")
+            if (added.isEmpty()) {
+                Banner("Своих транспортов пока нет. Импортируйте из GitHub или файла — они появятся при выборе транспорта в профиле.", Tone.Neutral)
             } else {
-                scripts.forEach { s ->
-                    ScriptCard(
-                        s,
-                        report = reports[s.id],
-                        busy = s.id in busy,
-                        hasPrevious = rev >= 0 && container.scripts.hasPrevious(s.id),
-                        onToggle = { container.scripts.setEnabled(s.id, it) },
-                        onDelete = { container.scripts.delete(s.id) },
-                        onCopy = { container.platform.setClipboardText(s.fingerprint) },
-                        onUpdate = { updateFor = s.id },
-                        onRollback = {
-                            scope.launch {
-                                val r = updater.rollback(s.id)
-                                rev++
-                                toaster.show(
-                                    if (r.installed) "Вернули версию ${r.latest}" else ScriptUpdateMessages.failure(r.code),
-                                    if (r.installed) Tone.Success else Tone.Danger,
-                                )
-                            }
-                        },
-                    )
+                added.forEach { card(it) }
+            }
+            var ownOpen by remember { mutableStateOf(false) }
+            val waiting = own.count { reports[it.id]?.let { r -> r.available || r.blocked } == true }
+            FoldHeader(
+                title = "Транспорты OpenFlux (${own.size})",
+                note = if (waiting > 0) "обновлений: $waiting" else null,
+                open = ownOpen,
+                onToggle = { ownOpen = !ownOpen },
+            )
+            if (ownOpen) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Обновлять их сами", style = AppTheme.typography.body, color = AppTheme.colors.text)
+                        Text(
+                            "Подписанные ключом OpenFlux, без смены формата обмена. Остальные транспорты спросят.",
+                            style = AppTheme.typography.caption,
+                            color = AppTheme.colors.textSecondary,
+                        )
+                    }
+                    Spacer(Modifier.width(AppTheme.spacing.m))
+                    AppSwitch(settings.autoUpdateScripts, { on -> container.settings.update { it.copy(autoUpdateScripts = on) } })
                 }
+                own.forEach { card(it) }
             }
             Banner(
                 "Скрипт-транспорт работает без песочницы: полный доступ к сети. Подпись автора обязательна и проверяется при каждом запуске — импортируйте только из доверенного источника.",
@@ -190,6 +213,28 @@ fun ScriptsScreen(container: AppContainer) {
             },
             onClose = { updateFor = null },
         )
+    }
+}
+
+/** A tappable row that folds a section away; [note] is a short accent line (e.g. updates waiting). */
+@Composable
+private fun FoldHeader(title: String, note: String?, open: Boolean, onToggle: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val turn by animateFloatAsState(if (open) 180f else 0f)
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(AppTheme.shapes.field)
+            .border(1.dp, AppTheme.colors.border, AppTheme.shapes.field)
+            .appClickable(interaction, onClick = onToggle)
+            .padding(horizontal = AppTheme.spacing.m, vertical = AppTheme.spacing.m),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = AppTheme.typography.bodyStrong, color = AppTheme.colors.text, modifier = Modifier.weight(1f))
+        if (note != null) {
+            Text(note, style = AppTheme.typography.caption, color = toneColor(Tone.Accent))
+            Spacer(Modifier.width(AppTheme.spacing.s))
+        }
+        Icon(Icons.Rounded.ExpandMore, if (open) "Свернуть" else "Развернуть", tint = AppTheme.colors.textSecondary, modifier = Modifier.rotate(turn))
     }
 }
 
@@ -332,7 +377,7 @@ private fun AddScriptDialog(container: AppContainer, onClose: () -> Unit) {
                     val bytes = platform.fetchBytes(u)
                     if (bytes == null) { error = "Не удалось скачать по ссылке"; busy = false; return@launch }
                     val signature = if (u.endsWith(".js")) (platform.fetchBytes("$u.sig") ?: ByteArray(0)) else ByteArray(0)
-                    inspect(bytes, signature, ScriptSource.GitHub, u)
+                    inspect(bytes, signature, if (u.contains("github", ignoreCase = true)) ScriptSource.GitHub else ScriptSource.Link, u)
                     busy = false
                 }
             } else {
