@@ -97,7 +97,7 @@ class KcefPage internal constructor(private val browser: KCEFBrowser) : BrowserP
     fun close() {
         if (closed) return
         closed = true
-        BuiltInBrowser.forgetSetupPage(browser.identifier)
+        BuiltInBrowser.forgetSetupPage(browser)
         val dispose = {
             val view = browser.uiComponent
             view.parent?.let { parent ->
@@ -122,9 +122,20 @@ object BuiltInBrowser {
     internal const val QUERY = "openfluxQuery"
     internal val pending = ConcurrentHashMap<String, CompletableDeferred<String>>()
 
-    /** CefBrowser identifiers of pages opened via [openHtml]: the only ones the submit bridge is injected into. */
-    private val setupPages = Collections.newSetFromMap(ConcurrentHashMap<Int, Boolean>())
-    internal fun forgetSetupPage(id: Int) { setupPages -= id }
+    /**
+     * Pages opened via [openHtml]: the only ones the submit bridge is injected
+     * into. CEF assigns a browser's identifier once it has created it, after
+     * createImmediately() returns (it reads -1 until then), and the browser
+     * object the load handler is given is not the KCEFBrowser built here. So
+     * the pages are kept as they were made and matched by identifier when the
+     * page has loaded, not when it is registered.
+     */
+    private val setupPages = Collections.newSetFromMap(ConcurrentHashMap<KCEFBrowser, Boolean>())
+    internal fun forgetSetupPage(browser: KCEFBrowser) { setupPages -= browser }
+    private fun isSetupPage(browser: CefBrowser): Boolean {
+        val id = browser.identifier
+        return id > 0 && setupPages.any { it.identifier == id }
+    }
 
     /** Raw JSON a setup page handed to window.openfluxSubmit. */
     private val _submissions = MutableSharedFlow<String>(extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -176,7 +187,7 @@ object BuiltInBrowser {
             val view = OsrView()
             val browser = client.createBrowser(url, CefRendering.CefRenderingWithHandler(view.renderHandler, view), false)
             view.browser = browser
-            setupPages += browser.identifier
+            setupPages += browser
             browser.createImmediately()
             BrowserLog.info("открываю страницу настройки скрипта")
             KcefPage(browser)
@@ -328,7 +339,7 @@ object BuiltInBrowser {
 
             override fun onLoadEnd(browser: CefBrowser?, frame: CefFrame?, httpStatusCode: Int) {
                 if (frame?.isMain == true) BrowserLog.info("страница ${browser?.identifier}: загружена, HTTP $httpStatusCode, ${BrowserLog.short(frame.url)}")
-                if (frame?.isMain == true && browser != null && browser.identifier in setupPages) {
+                if (frame?.isMain == true && browser != null && isSetupPage(browser)) {
                     browser.executeJavaScript(SUBMIT_BRIDGE_JS, frame.url, 0)
                 }
             }
