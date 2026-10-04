@@ -57,15 +57,18 @@ fun ScriptSettingsDialog() {
             Spacer(Modifier.height(AppTheme.spacing.m))
             Banner(current.error, Tone.Danger, icon = Icons.Rounded.ErrorOutline)
         }
-        Spacer(Modifier.height(AppTheme.spacing.m))
-        Box(
-            Modifier.fillMaxWidth().height(pageHeight).clip(AppTheme.shapes.card)
-                .border(1.dp, AppTheme.colors.border, AppTheme.shapes.card),
-            contentAlignment = Alignment.Center,
-        ) {
-            val shown = current.page
-            if (shown != null) browsers.Page(shown, Modifier.fillMaxSize())
-            else if (current.error.isBlank()) Text(current.progress.ifEmpty { "Открываю настройки…" }, style = AppTheme.typography.body, color = AppTheme.colors.textSecondary)
+        // No empty frame when there is nothing to show but an error.
+        if (current.page != null || current.error.isBlank()) {
+            Spacer(Modifier.height(AppTheme.spacing.m))
+            Box(
+                Modifier.fillMaxWidth().height(pageHeight).clip(AppTheme.shapes.card)
+                    .border(1.dp, AppTheme.colors.border, AppTheme.shapes.card),
+                contentAlignment = Alignment.Center,
+            ) {
+                val shown = current.page
+                if (shown != null) browsers.Page(shown, Modifier.fillMaxSize())
+                else Text(current.progress.ifEmpty { "Открываю настройки…" }, style = AppTheme.typography.body, color = AppTheme.colors.textSecondary)
+            }
         }
     }
 }
