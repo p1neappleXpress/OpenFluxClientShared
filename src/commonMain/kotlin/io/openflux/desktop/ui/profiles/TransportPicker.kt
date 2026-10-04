@@ -72,6 +72,7 @@ internal fun TransportPickerDialog(
     val shell = LocalShell.current
     AppDialog(title = "Транспорт", onDismiss = onDismiss, secondary = "Закрыть", enterSubmits = false) {
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AppTheme.spacing.s)) {
+            TextAction("Управлять транспортами", { onDismiss(); shell.open(ScriptsTab) })
             SectionLabel("Встроенные")
             native.forEach { type ->
                 TransportRow(
@@ -100,7 +101,6 @@ internal fun TransportPickerDialog(
                     checked = selected == TransportType.SCRIPT && selectedScriptId == s.id,
                 ) { onSelect(TransportType.SCRIPT, s.id) }
             }
-            TextAction("Управлять транспортами", { onDismiss(); shell.open(ScriptsTab) })
         }
     }
 }
