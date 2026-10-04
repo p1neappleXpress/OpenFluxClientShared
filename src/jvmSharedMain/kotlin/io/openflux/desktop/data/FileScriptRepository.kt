@@ -1,9 +1,9 @@
 package io.openflux.desktop.data
 
 import io.openflux.desktop.model.InstalledScript
-import io.openflux.desktop.model.ScriptParam
 import io.openflux.desktop.model.ScriptSource
 import io.openflux.desktop.model.TransportType
+import io.openflux.desktop.model.parseScriptParams
 import io.openflux.desktop.model.withTrustReport
 import io.openflux.desktop.service.ScriptRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -11,8 +11,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
@@ -100,7 +98,7 @@ abstract class FileScriptRepository(
             fileName = fileName,
             icon = TransportType.fromCli(name)?.icon ?: "ic_code",
             official = report["official"]?.jsonPrimitive?.booleanOrNull == true,
-            params = parseParams(report["params"]),
+            params = parseScriptParams(report["params"]),
             source = source,
             origin = origin,
             addedAt = now,
@@ -116,6 +114,18 @@ abstract class FileScriptRepository(
         persist()
     }
 
+    override fun saveSettings(id: String, values: Map<String, String>) {
+        _scripts.value = _scripts.value.map { if (it.id == id) it.copy(settings = values) else it }
+        persist()
+    }
+
+    override fun packageBytes(id: String): Pair<ByteArray, ByteArray>? {
+        val s = byId(id) ?: return null
+        val file = File(dir, s.fileName).takeIf { it.exists() } ?: return null
+        val sig = File(dir, s.fileName + ".sig").takeIf { it.exists() }?.readBytes() ?: ByteArray(0)
+        return file.readBytes() to sig
+    }
+
     override fun hasPrevious(id: String): Boolean = byId(id)?.let { File(dir, it.fileName + ".prev").exists() } == true
 
     override fun refresh(id: String): InstalledScript? {
@@ -129,18 +139,6 @@ abstract class FileScriptRepository(
         _scripts.value = _scripts.value.map { if (it.id == id) updated else it }
         persist()
         return updated
-    }
-
-    private fun parseParams(el: JsonElement?): List<ScriptParam> {
-        val arr = (el as? JsonArray) ?: return emptyList()
-        return arr.mapNotNull { it as? JsonObject }.map { o ->
-            ScriptParam(
-                key = o["key"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                label = o["label"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                type = o["type"]?.jsonPrimitive?.contentOrNull ?: "text",
-                required = o["required"]?.jsonPrimitive?.booleanOrNull == true,
-            )
-        }
     }
 
     private fun load(): List<InstalledScript> = runCatching {

@@ -14,6 +14,7 @@ import io.openflux.desktop.platform.JvmPlatformServices
 import io.openflux.desktop.service.AppContainer
 import io.openflux.desktop.service.NodeKeepingConnection
 import io.openflux.desktop.service.PhpHostingService
+import io.openflux.desktop.web.KcefSettingsPageHost
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,5 +38,6 @@ fun createAppContainer(appVersion: String): AppContainer {
         nodeWizard = CoreNodeWizard(settings, binary),
         phpHosting = phpHosting,
         scripts = scripts,
+        settingsPageHost = KcefSettingsPageHost,
     )
 }

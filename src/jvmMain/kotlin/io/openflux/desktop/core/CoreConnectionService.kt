@@ -1,5 +1,7 @@
 package io.openflux.desktop.core
 
+import io.openflux.desktop.model.SetupPages
+
 import io.openflux.desktop.data.AppDirs
 import io.openflux.desktop.data.restrictToOwner
 import io.openflux.desktop.model.AppSettings
@@ -35,10 +37,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonObject
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.file.Files
@@ -519,12 +517,15 @@ class CoreConnectionService(
         log(
             LogLevel.Warning,
             when {
-                request.html.isNotEmpty() -> "Транспорт «${request.transport}» просит настройку"
+                request.isOwn -> "Транспорт «${request.transport}» просит настройку"
                 request.remote -> "Нода просит пройти проверку Яндекса"
                 else -> "Яндекс просит пройти проверку"
             },
         )
-        _captcha.value = CaptchaPrompt(request.url, request.reason, request.remote, html = request.html.ifEmpty { null })
+        _captcha.value = CaptchaPrompt(
+            request.url, request.reason, request.remote,
+            html = request.html.ifEmpty { null }, own = request.isOwn, transport = request.transport,
+        )
         openCaptcha()
     }
 
@@ -538,7 +539,7 @@ class CoreConnectionService(
             _captcha.update { it?.copy(error = error?.message.orEmpty(), progress = "") }
             // A script's own setup page submits itself (onSetupSubmission); only
             // a real check can pass silently and needs this nudge.
-            if (error == null && request.html.isEmpty() && captchaBrowser.awaitPassed() && pendingCaptcha == request) {
+            if (error == null && !request.isOwn && captchaBrowser.awaitPassed() && pendingCaptcha == request) {
                 log(LogLevel.Info, "Страница Яндекса открылась без проверки, передаю cookies")
                 submitCaptcha()
             }
@@ -547,21 +548,17 @@ class CoreConnectionService(
 
     /**
      * window.openfluxSubmit(payload) from a script's own setup page
-     * (BuiltInBrowser.submissions). payload is either flat {key: value} or
-     * {client: {...}, node: {...}} (see the node-config-scope design); only
-     * the client half is applied here today - node delivery during a node
-     * deploy is a separate, not yet wired, path.
+     * (BuiltInBrowser.submissions); [SetupSubmission.flatten] says how the
+     * payload is read. Only the client half of {client, node} is applied -
+     * node delivery during a node deploy is a separate, not yet wired, path.
      */
     private fun onSetupSubmission(json: String) {
         val request = pendingCaptcha ?: return
-        if (request.html.isEmpty() || _captcha.value?.busy == true) return
+        if (!request.isOwn || _captcha.value?.busy == true) return
         _captcha.update { it?.copy(busy = true, error = "") }
         scope.launch {
             try {
-                val root = Json.parseToJsonElement(json).jsonObject
-                val scoped = (root["client"] as? JsonObject) ?: root
-                val jar = scoped.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.let { k to it.content } }.toMap()
-                require(jar.isNotEmpty()) { "Страница настройки не передала данных" }
+                val jar = SetupPages.flatten(json)
                 val ipc = synchronized(lock) { run }?.ipc ?: throw IllegalStateException("Ядро не на связи")
                 ipc.offerCookies(IpcCookiesOffer(request.transport, jar, remote = request.remote))
                 log(LogLevel.Success, "Настройка передана транспорту «${request.transport}»")

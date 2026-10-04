@@ -181,6 +181,13 @@ class JvmPlatformServices(
         return runInspectScript(core, data, sig, pubkeyHex)
     }
 
+    // The settings wizard of an installed transport: `--script-settings` (transport/script.BuildSettings).
+    override fun scriptSettings(data: ByteArray, sig: ByteArray, pubkeyHex: String, valuesJson: String, lang: String): String {
+        val core = binary.bundled()
+            ?: return """{"ok":false,"code":"failed","error":"ядро не найдено"}"""
+        return runScriptSettings(core, data, sig, pubkeyHex, valuesJson, lang)
+    }
+
     // Script-transport updates: the core's own subcommands (transport/script/update.go),
     // the same logic the mobile apps call in-process. The installed transport is the
     // JSON the updater builds; it is turned into flags here.
@@ -237,6 +244,33 @@ class JvmPlatformServices(
 
     override suspend fun readBytes(pathOrUri: String): ByteArray? = withContext(Dispatchers.IO) {
         runCatching { File(pathOrUri).readBytes() }.getOrNull()
+    }
+
+    /** Runs `<core> --script-settings --data=<f> [--sig=<f>] --pubkey=<hex> --values=<json> --lang=<l>`, returning its JSON stdout as-is. */
+    private fun runScriptSettings(core: File, data: ByteArray, sig: ByteArray, pubkeyHex: String, valuesJson: String, lang: String): String {
+        val dataFile = File.createTempFile("ofx-script-", ".bin")
+        val sigFile = if (sig.isNotEmpty()) File.createTempFile("ofx-script-", ".sig") else null
+        return try {
+            dataFile.writeBytes(data)
+            sigFile?.writeBytes(sig)
+            val args = buildList {
+                add(core.absolutePath); add("--script-settings"); add("--data=${dataFile.absolutePath}")
+                sigFile?.let { add("--sig=${it.absolutePath}") }
+                add("--pubkey=${pubkeyHex.trim()}")
+                if (valuesJson.isNotBlank()) add("--values=$valuesJson")
+                add("--lang=$lang")
+            }
+            val process = ProcessBuilder(args).redirectErrorStream(false).start()
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor(15, TimeUnit.SECONDS)
+            output.trim().ifBlank { """{"ok":false,"code":"failed","error":"ядро не ответило"}""" }
+        } catch (e: Exception) {
+            val msg = (e.message ?: "неизвестная ошибка").replace("\\", "\\\\").replace("\"", "\\\"")
+            """{"ok":false,"code":"failed","error":"$msg"}"""
+        } finally {
+            dataFile.delete()
+            sigFile?.delete()
+        }
     }
 
     /** Runs `<core> --inspect-script --data=<f> [--sig=<f>] [--pubkey=<hex>]`, returning its JSON stdout as-is. */

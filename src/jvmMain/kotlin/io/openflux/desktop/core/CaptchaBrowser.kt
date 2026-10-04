@@ -27,6 +27,14 @@ class CaptchaBrowser : AutoCloseable {
             _page.value = BuiltInBrowser.openHtml(request.html, onStep)
             return
         }
+        if (request.isOwn) {
+            // The script's own server (httpserver.listen(), http://127.0.0.1:port): the core only
+            // lets through the address of one it started. Not from a node: a loopback address
+            // there means nothing here (the core does not forward it, this is the second lock).
+            require(!request.remote) { "Страница настройки ноды не открывается с адреса 127.0.0.1" }
+            _page.value = BuiltInBrowser.openOwn(request.url, onStep)
+            return
+        }
         require(URI(request.url).scheme == "https") { "The check URL must use HTTPS" }
         val upstream = if (request.remote) {
             request.proxy.also { require(BrowserProxy.isLoopback(it)) { "Проверке ноды нужен локальный прокси" } }

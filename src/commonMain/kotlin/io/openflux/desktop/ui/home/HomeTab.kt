@@ -318,6 +318,7 @@ private fun DetailsColumn(model: HomeScreenModel, selected: Profile?, state: Con
     val toaster = LocalToaster.current
     val shell = LocalShell.current
     val traffic by model.connection.traffic.collectAsState()
+    val scripts by LocalAppContainer.current.scripts.scripts.collectAsState()
     val socks by model.connection.socksAddress.collectAsState()
     val exitAddress by model.connection.exitAddress.collectAsState()
     val shareLink by model.connection.exitShareLink.collectAsState()
@@ -351,7 +352,7 @@ private fun DetailsColumn(model: HomeScreenModel, selected: Profile?, state: Con
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Трафик", style = AppTheme.typography.sectionTitle, color = AppTheme.colors.text, modifier = Modifier.weight(1f))
                 if (traffic.activeCarriers.isNotEmpty()) {
-                    StatusBadge("через " + traffic.activeCarriers.joinToString(" + ", transform = TransportType::carrierLabel), Tone.Accent)
+                    StatusBadge("через " + profile.carrierLabels(traffic.activeCarriers, scripts), Tone.Accent)
                 }
             }
             Spacer(Modifier.height(AppTheme.spacing.l))
@@ -380,7 +381,7 @@ private fun DetailsColumn(model: HomeScreenModel, selected: Profile?, state: Con
             KeyValueRow(if (profile.carriers.size > 1) "Транспорты" else "Транспорт", profile.summary)
             HorizontalRule()
             if (profile.carriers.size > 1 && traffic.activeCarriers.isNotEmpty()) {
-                KeyValueRow("Сейчас через", traffic.activeCarriers.joinToString(" + ", transform = TransportType::carrierLabel))
+                KeyValueRow("Сейчас через", profile.carrierLabels(traffic.activeCarriers, scripts))
                 HorizontalRule()
             }
             KeyValueRow("Шифрование", if (profile.secret.isNotEmpty()) "AES-256-GCM" else "Нет ключа")

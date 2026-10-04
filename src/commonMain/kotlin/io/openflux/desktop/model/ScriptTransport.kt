@@ -2,14 +2,34 @@ package io.openflux.desktop.model
 
 import kotlinx.serialization.Serializable
 
-/** One input a script transport asks for, from its info().params. */
+/** One choice of a select param. */
+@Serializable
+data class ScriptOption(val value: String, val label: String = "") {
+    val shown: String get() = label.ifBlank { value }
+}
+
+/**
+ * One input a script transport asks for, from its info().params (see
+ * transport/script.Param in the core, which also resolves [scope]).
+ */
 @Serializable
 data class ScriptParam(
     val key: String,
     val label: String = "",
-    /** "url" | "text" | "secret". */
+    /** "url" | "text" | "secret" | "number" | "boolean" | "select" | "textarea". */
     val type: String = "text",
     val required: Boolean = false,
+    /** "profile" (the profile editor's value field) or "settings" (the wizard); "" for a record older than the field. */
+    val scope: String = "",
+    val default: String = "",
+    val description: String = "",
+    val placeholder: String = "",
+    val options: List<ScriptOption> = emptyList(),
+    val min: Double? = null,
+    val max: Double? = null,
+    val pattern: String = "",
+    val group: String = "",
+    val advanced: Boolean = false,
 )
 
 /** Where an installed script came from; shown in its details. */
@@ -47,6 +67,10 @@ data class InstalledScript(
     val official: Boolean = false,
     val enabled: Boolean = true,
     val params: List<ScriptParam> = emptyList(),
+    /** The script brings a settings page of its own (Transport.settings), so it has settings even with none declared. */
+    val settingsPage: Boolean = false,
+    /** What the user saved in the settings wizard; the script gets it as cfg.params (defaults fill what is missing). */
+    val settings: Map<String, String> = emptyMap(),
     val source: ScriptSource = ScriptSource.File,
     /** URL or repo reference it was added from, for updates and display. */
     val origin: String = "",
@@ -61,8 +85,23 @@ data class InstalledScript(
     /** A signed package that says where its updates are. */
     val updatable: Boolean get() = fileName.endsWith(".flux") && updateUrls.isNotEmpty()
 
-    /** The main input shown on the profile's value field (first param). */
-    val primaryParam: ScriptParam? get() = params.firstOrNull()
+    /**
+     * The main input shown on the profile's value field. The core resolves each
+     * param's scope; a record from before that (no scope anywhere) keeps the old
+     * rule: the first param.
+     */
+    val primaryParam: ScriptParam?
+        get() = if (params.any { it.scope.isNotEmpty() }) params.firstOrNull { it.scope == "profile" } else params.firstOrNull()
+
+    /** The params the settings wizard asks for: everything but [primaryParam]. */
+    val settingParams: List<ScriptParam>
+        get() = if (params.any { it.scope.isNotEmpty() }) params.filter { it.scope == "settings" } else params.drop(1)
+
+    /** Whether the wizard has anything to show. */
+    val hasSettings: Boolean get() = settingParams.isNotEmpty() || settingsPage
+
+    /** "3 из 5" style summary: how many of the declared settings are set (a default counts as not set). */
+    val settingsFilled: Int get() = settingParams.count { settings[it.key].orEmpty().isNotBlank() }
 
     /** Fingerprint grouped for display: "ab cd ef 12 …". */
     val shortFingerprint: String

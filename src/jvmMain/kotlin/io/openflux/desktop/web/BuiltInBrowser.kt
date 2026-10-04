@@ -4,6 +4,7 @@ import dev.datlag.kcef.KCEF
 import dev.datlag.kcef.KCEFBrowser
 import dev.datlag.kcef.KCEFClient
 import io.openflux.desktop.data.AppDirs
+import io.openflux.desktop.model.SetupPages
 import io.openflux.desktop.ui.BrowserPage
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -123,21 +124,37 @@ object BuiltInBrowser {
     internal val pending = ConcurrentHashMap<String, CompletableDeferred<String>>()
 
     /**
-     * Pages opened via [openHtml]: the only ones the submit bridge is injected
-     * into. CEF assigns a browser's identifier once it has created it, after
-     * createImmediately() returns (it reads -1 until then), and the browser
-     * object the load handler is given is not the KCEFBrowser built here. So
-     * the pages are kept as they were made and matched by identifier when the
-     * page has loaded, not when it is registered.
+     * Pages that are a script's own (openHtml, openOwn), and the address their
+     * frame must keep: the only pages the submit bridge is injected into and
+     * that window.openfluxSubmit is heard from, so a site a setup page links
+     * to cannot hand the script data. CEF assigns a browser's identifier once
+     * it has created it, after createImmediately() returns (it reads -1 until
+     * then), and the browser object the load handler is given is not the
+     * KCEFBrowser built here. So the pages are kept as they were made and
+     * matched by identifier when a page has loaded or asks, not when it is
+     * registered.
      */
-    private val setupPages = Collections.newSetFromMap(ConcurrentHashMap<KCEFBrowser, Boolean>())
+    private class SetupPage(val prefix: String, val onSubmit: ((String) -> Unit)?)
+
+    private val setupPages = ConcurrentHashMap<KCEFBrowser, SetupPage>()
     internal fun forgetSetupPage(browser: KCEFBrowser) { setupPages -= browser }
-    private fun isSetupPage(browser: CefBrowser): Boolean {
-        val id = browser.identifier
-        return id > 0 && setupPages.any { it.identifier == id }
+
+    /** The registered page [browser] is, if [frameUrl] is still at its own address. */
+    private fun setupPage(browser: CefBrowser?, frameUrl: String?): SetupPage? {
+        val id = browser?.identifier ?: return null
+        if (id <= 0 || frameUrl == null) return null
+        return setupPages.entries.firstOrNull { (page, _) -> page.identifier == id }
+            ?.value?.takeIf { frameUrl.startsWith(it.prefix, ignoreCase = true) }
     }
 
-    /** Raw JSON a setup page handed to window.openfluxSubmit. */
+    private fun isSetupPage(browser: CefBrowser?, frameUrl: String?): Boolean = setupPage(browser, frameUrl) != null
+
+    /**
+     * Raw JSON a setup page handed to window.openfluxSubmit, for pages opened
+     * without their own callback (the connection's setup request). A page
+     * opened with `onSubmit` (a script's settings wizard) is answered there
+     * instead, never here: what one page submits must not reach the other's owner.
+     */
     private val _submissions = MutableSharedFlow<String>(extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val submissions: SharedFlow<String> = _submissions.asSharedFlow()
 
@@ -161,15 +178,8 @@ object BuiltInBrowser {
     suspend fun open(url: String, upstream: String? = null, onStep: (String) -> Unit = {}): KcefPage {
         val client = client(onStep)
         proxy.upstream = upstream
-        return withContext(Dispatchers.Swing) {
-            // Off-screen: frames are drawn by OsrView, see there why.
-            val view = OsrView()
-            val browser = client.createBrowser(url, CefRendering.CefRenderingWithHandler(view.renderHandler, view), false)
-            view.browser = browser
-            // Create it now, not when shown: scripts and cookies work before the page is on screen.
-            browser.createImmediately()
+        return create(client, url, setup = null).also {
             BrowserLog.info("открываю ${BrowserLog.short(url)}" + if (upstream != null) " через прокси ноды $upstream" else " напрямую")
-            KcefPage(browser)
         }
     }
 
@@ -177,21 +187,46 @@ object BuiltInBrowser {
      * Opens a script transport's own setup/login page (js/template_html.html
      * in the core) inline - never through the node's proxy, same as
      * httpserver.listen() being loopback-only. The page's own
-     * window.openfluxSubmit(payload) reaches [submissions] as raw JSON.
+     * window.openfluxSubmit(payload) reaches [submissions] as raw JSON; the
+     * function is there before the page's own scripts run.
      */
-    suspend fun openHtml(html: String, onStep: (String) -> Unit = {}): KcefPage {
+    suspend fun openHtml(html: String, onStep: (String) -> Unit = {}, onSubmit: ((String) -> Unit)? = null): KcefPage {
         val client = client(onStep)
         proxy.upstream = null
-        val url = "data:text/html;charset=utf-8;base64," + Base64.getEncoder().encodeToString(html.toByteArray(Charsets.UTF_8))
-        return withContext(Dispatchers.Swing) {
-            val view = OsrView()
-            val browser = client.createBrowser(url, CefRendering.CefRenderingWithHandler(view.renderHandler, view), false)
-            view.browser = browser
-            setupPages += browser
-            browser.createImmediately()
+        val page = SetupPages.inject(html, BRIDGE_JS)
+        val url = "data:text/html;charset=utf-8;base64," + Base64.getEncoder().encodeToString(page.toByteArray(Charsets.UTF_8))
+        return create(client, url, SetupPage("data:text/html;", onSubmit)).also {
             BrowserLog.info("открываю страницу настройки скрипта")
-            KcefPage(browser)
         }
+    }
+
+    /**
+     * Opens a script transport's own page served by the script itself
+     * (httpserver.listen() in the core), an http address on loopback; the
+     * core only lets through the address of a server that script started.
+     * Never through the node's proxy. window.openfluxSubmit is put into the
+     * page when it has loaded and fires "openflux-ready"; it stays with that
+     * address (a link to another site does not get it).
+     */
+    suspend fun openOwn(url: String, onStep: (String) -> Unit = {}): KcefPage {
+        val origin = SetupPages.loopbackOrigin(url)
+            ?: throw IllegalArgumentException("Страница настройки скрипта открывается только с адреса 127.0.0.1 его собственного сервера")
+        val client = client(onStep)
+        proxy.upstream = null
+        return create(client, url, SetupPage(origin, null)).also {
+            BrowserLog.info("открываю страницу настройки скрипта ${BrowserLog.short(url)}")
+        }
+    }
+
+    /** Off-screen: frames are drawn by OsrView, see there why. */
+    private suspend fun create(client: KCEFClient, url: String, setup: SetupPage?): KcefPage = withContext(Dispatchers.Swing) {
+        val view = OsrView()
+        val browser = client.createBrowser(url, CefRendering.CefRenderingWithHandler(view.renderHandler, view), false)
+        view.browser = browser
+        if (setup != null) setupPages[browser] = setup
+        // Create it now, not when shown: scripts and cookies work before the page is on screen.
+        browser.createImmediately()
+        KcefPage(browser)
     }
 
     /** Cookies the browser would send to [url], HTTP-only ones included. */
@@ -314,7 +349,15 @@ object BuiltInBrowser {
             ): Boolean {
                 val text = request ?: return false
                 if (text.startsWith("submit|")) {
-                    _submissions.tryEmit(text.removePrefix("submit|"))
+                    // Only the script's own page, at its own address, may hand data back.
+                    val page = setupPage(browser, frame?.url)
+                    if (page == null) {
+                        BrowserLog.problem("страница ${browser?.identifier}: данные от страницы, которая не страница настройки скрипта, отброшены")
+                        callback?.failure(0, "not a setup page")
+                        return true
+                    }
+                    val payload = text.removePrefix("submit|")
+                    if (page.onSubmit != null) page.onSubmit.invoke(payload) else _submissions.tryEmit(payload)
                     callback?.success("")
                     return true
                 }
@@ -339,8 +382,8 @@ object BuiltInBrowser {
 
             override fun onLoadEnd(browser: CefBrowser?, frame: CefFrame?, httpStatusCode: Int) {
                 if (frame?.isMain == true) BrowserLog.info("страница ${browser?.identifier}: загружена, HTTP $httpStatusCode, ${BrowserLog.short(frame.url)}")
-                if (frame?.isMain == true && browser != null && isSetupPage(browser)) {
-                    browser.executeJavaScript(SUBMIT_BRIDGE_JS, frame.url, 0)
+                if (frame?.isMain == true && browser != null && isSetupPage(browser, frame.url)) {
+                    browser.executeJavaScript(BRIDGE_JS, frame.url, 0)
                 }
             }
 
@@ -412,13 +455,9 @@ object BuiltInBrowser {
     const val YANDEX_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0"
 
     /** Defines window.openfluxSubmit for a setup page, routed through the same query channel [evaluate] uses. */
-    private val SUBMIT_BRIDGE_JS = """
-        window.openfluxSubmit = function (payload) {
-          try {
-            window.$QUERY({request: 'submit|' + JSON.stringify(payload), onSuccess: function () {}, onFailure: function () {}});
-          } catch (e) {}
-        };
-    """
+    private val BRIDGE_JS = SetupPages.bridgeScript(
+        "window.$QUERY({request:'submit|'+j,onSuccess:function(){},onFailure:function(){}})",
+    )
 
     /**
      * The JetBrains Runtime build with JCEF that matches the JCEF classes

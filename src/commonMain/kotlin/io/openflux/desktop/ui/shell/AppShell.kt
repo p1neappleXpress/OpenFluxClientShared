@@ -204,6 +204,7 @@ private fun AppShell(shell: ShellController, toaster: Toaster) {
             val toastGap = if (shell.widthClass == WidthClass.Phone) AppTheme.dimens.bottomBarHeight + AppTheme.spacing.m else AppTheme.spacing.xxl
             ToastHost(toaster, Modifier.align(Alignment.BottomCenter).padding(bottom = toastGap, start = AppTheme.spacing.l, end = AppTheme.spacing.l))
             CaptchaDialog()
+            ScriptSettingsDialog()
         }
     }
 }

@@ -270,8 +270,10 @@ private fun CarrierFields(carrier: ExtraTransport, session: Boolean, showPriorit
         TransportDropdown(carrier.type, carrier.scriptId, installedScripts, session, stream) { type, sid ->
             onChange(carrier.copy(type = type, scriptId = sid))
         }
+        // A script that has no profile input (all its params are settings) shows no value field.
+        val noValueField = carrier.type == TransportType.SCRIPT && script != null && scriptParam == null
         Row(horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.m)) {
-            AppTextField(
+            if (!noValueField) AppTextField(
                 value = carrier.value,
                 onValueChange = { onChange(carrier.copy(value = it.trim())) },
                 label = when {
@@ -305,6 +307,19 @@ private fun CarrierFields(carrier: ExtraTransport, session: Boolean, showPriorit
                     keyboardType = KeyboardType.Number,
                     modifier = Modifier.width(110.dp),
                 )
+            }
+        }
+        if (script != null && script.hasSettings) {
+            val container = LocalAppContainer.current
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.m)) {
+                val total = script.settingParams.size
+                Text(
+                    if (total == 0) "У скрипта своя страница настроек" else "Настройки скрипта: ${script.settingsFilled} из $total",
+                    style = AppTheme.typography.caption,
+                    color = AppTheme.colors.textSecondary,
+                    modifier = Modifier.weight(1f),
+                )
+                TextAction("Открыть настройки", { container.scriptSettings.open(script.id) })
             }
         }
         if (carrier.type == TransportType.ONEME) {

@@ -116,6 +116,24 @@ data class Profile(
         }
     }
 
+    /**
+     * What to call a carrier the core reports by its session name ("boards-2",
+     * "script", "script-2") on screen and in the notification: "Board 2" for a
+     * native one, the script's own name for a script transport (the core only
+     * knows it as "script"). [scripts] are the installed ones.
+     */
+    fun carrierLabel(coreName: String, scripts: List<InstalledScript>): String {
+        val spec = sessionSpecs().firstOrNull { it.name == coreName }
+        if (spec != null && spec.type == TransportType.SCRIPT) {
+            return scripts.firstOrNull { it.id == spec.scriptId }?.name?.ifBlank { null } ?: spec.scriptId.ifBlank { "JS" }
+        }
+        return TransportType.carrierLabel(coreName)
+    }
+
+    /** The carriers that carry data now, named for the screen: "Volga + Мой транспорт". */
+    fun carrierLabels(coreNames: List<String>, scripts: List<InstalledScript>): String =
+        coreNames.joinToString(" + ") { carrierLabel(it, scripts) }
+
     /** The link another device scans; null with why when it cannot be shared. */
     fun toShare(): Result<ShareConfig> = runCatching {
         if (stream) {

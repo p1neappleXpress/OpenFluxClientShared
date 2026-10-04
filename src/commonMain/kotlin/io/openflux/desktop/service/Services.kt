@@ -58,6 +58,15 @@ interface ScriptRepository {
     /** Pins the install to another author key, after the core accepted an update signed by it (a rotation of OpenFlux's own keys). */
     fun repin(id: String, pubkeyHex: String, fingerprint: String) {}
 
+    /** Keeps what the settings wizard returned for [id]; the script gets it as cfg.params from its next start. */
+    fun saveSettings(id: String, values: Map<String, String>) {}
+
+    /**
+     * The installed file and its detached signature (empty for a .flux): what
+     * the core reads to build the settings page. Null when it is gone.
+     */
+    fun packageBytes(id: String): Pair<ByteArray, ByteArray>? = null
+
     /**
      * Verifies a downloaded transport ([data] a .flux or bare .js, [sig] the
      * detached signature for a .js) against [pubkeyHex] and, only if the
@@ -84,6 +93,9 @@ class InMemoryScriptRepository : ScriptRepository {
     override fun delete(id: String) { _scripts.value = _scripts.value.filterNot { it.id == id } }
     override fun setEnabled(id: String, enabled: Boolean) {
         _scripts.value = _scripts.value.map { if (it.id == id) it.copy(enabled = enabled) else it }
+    }
+    override fun saveSettings(id: String, values: Map<String, String>) {
+        _scripts.value = _scripts.value.map { if (it.id == id) it.copy(settings = values) else it }
     }
 }
 
@@ -185,6 +197,16 @@ interface PlatformServices {
     fun inspectTransport(data: ByteArray, sig: ByteArray, pubkeyHex: String): String =
         """{"ok":false,"error":"script transports not supported on this platform"}"""
 
+    /**
+     * The settings wizard page of an installed transport: the core verifies
+     * [data]/[sig] against the pinned [pubkeyHex], reads the script's declared
+     * settings and returns its JSON SettingsReport (ok, code, error, params,
+     * html, values) for [valuesJson], the current settings as a JSON object of
+     * strings. [lang] is "ru" or "en". Blocking: call off the UI thread.
+     */
+    fun scriptSettings(data: ByteArray, sig: ByteArray, pubkeyHex: String, valuesJson: String, lang: String): String =
+        """{"ok":false,"code":"failed","error":"script transports not supported on this platform"}"""
+
     /** SHA-256 (hex) of an author public key, "" if it can't be decoded. */
     fun scriptFingerprint(pubkeyHex: String): String = ""
 
@@ -260,7 +282,12 @@ class AppContainer(
     val phpHosting: PhpHostingService = PhpHostingService(),
     /** Installed JS script transports; in-memory no-op unless the platform ships one. */
     val scripts: ScriptRepository = InMemoryScriptRepository(),
+    /** Shows a script's settings page in the platform's built-in browser. */
+    settingsPageHost: SettingsPageHost = NoSettingsPageHost,
 ) {
+    /** The "Настройки" of an installed script transport (its wizard page, saved with the script). */
+    val scriptSettings: ScriptSettingsService by lazy { ScriptSettingsService(scripts, platform, settingsPageHost) }
+
     /** Checks installed script transports for updates and applies them. */
     val scriptUpdater: ScriptUpdater by lazy { ScriptUpdater(scripts, platform, settings) }
 

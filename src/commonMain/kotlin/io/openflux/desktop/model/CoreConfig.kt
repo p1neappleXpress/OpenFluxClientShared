@@ -9,7 +9,13 @@ data class CorePaths(
 )
 
 /** A SCRIPT carrier's on-disk path + pinned key, resolved by the platform layer for CoreConfig.build/session. */
-data class ScriptCarrierLookup(val path: String, val pubkeyHex: String, val name: String)
+data class ScriptCarrierLookup(
+    val path: String,
+    val pubkeyHex: String,
+    val name: String,
+    /** What the user saved in the script's settings wizard; the script gets it as cfg.params. */
+    val settings: Map<String, String> = emptyMap(),
+)
 
 /** How to start the core for a profile: the .conf body (Session) and flags. */
 data class CoreLaunch(
@@ -95,6 +101,8 @@ object CoreConfig {
                     appendLine("Path = ${confValue(carrier.path)}")
                     appendLine("Pubkey = ${confValue(carrier.pubkeyHex)}")
                     appendLine("Name = ${confValue(carrier.name)}")
+                    // The saved settings ride as one line: a .conf value ends at '#' or ';' and a setting may hold either.
+                    if (carrier.settings.isNotEmpty()) appendLine("Params = ${ScriptSettingsCodec.encode(carrier.settings)}")
                 }
             }
             // The exit listens for direct only when the profile has it; its

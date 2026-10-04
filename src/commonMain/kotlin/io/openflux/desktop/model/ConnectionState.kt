@@ -64,9 +64,10 @@ sealed interface ExitAddress {
 
 /**
  * A check or setup step the core asks the user to pass in a browser: a real
- * site's [url] (Yandex et al.), or a script transport's own [html] setup
- * page (see js/template_html.html in the core) - never both. [url] is ""
- * when [html] is set.
+ * site's check ([own] false, [url] is https), or a script transport's own
+ * setup page ([own] true): its inline [html] (then [url] is ""), or a [url]
+ * on the script's own loopback server. An own page hands its data back
+ * itself (window.openfluxSubmit); nothing is collected from it.
  */
 data class CaptchaPrompt(
     val url: String,
@@ -79,6 +80,10 @@ data class CaptchaPrompt(
     val busy: Boolean = false,
     /** The built-in browser getting ready (first-run download). */
     val progress: String = "",
+    /** The page is the script's own (inline [html] or its own server), not a site's check. */
+    val own: Boolean = html != null,
+    /** The transport that asked, for the dialog's title. */
+    val transport: String = "",
 )
 
 enum class LogLevel { Info, Success, Warning, Error, Debug }

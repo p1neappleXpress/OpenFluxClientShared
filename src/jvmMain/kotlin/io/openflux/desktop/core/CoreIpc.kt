@@ -24,7 +24,15 @@ data class IpcCookiesRequest(
     val reason: String = "",
     val remote: Boolean = false,
     val proxy: String = "",
-)
+    /**
+     * The page is the script's own - [html], or a [url] on the script's own
+     * loopback server - not a real site's check. The core decides (a core
+     * before this field sent only [html], hence [isOwn]).
+     */
+    val own: Boolean = false,
+) {
+    val isOwn: Boolean get() = own || html.isNotEmpty()
+}
 
 /** Cookies for the core (MsgCookiesOffer); remote ones go on to the exit. */
 @Serializable

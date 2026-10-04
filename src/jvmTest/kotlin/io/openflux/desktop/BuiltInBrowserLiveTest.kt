@@ -59,6 +59,12 @@ class BuiltInBrowserLiveTest {
             val path = ex.requestURI.path
             val body = when (path) {
                 "/ua" -> ex.requestHeaders.getFirst("User-Agent").orEmpty()
+                "/own" -> """<!doctype html><html><head><title>own</title></head><body style="margin:0">
+                    <script>window.early = typeof window.openfluxSubmit; window.readyFired = false;
+                      window.addEventListener('openflux-ready', function () { window.readyFired = true; });</script>
+                    <button style="position:absolute;left:100px;top:100px;width:200px;height:80px;font-size:24px"
+                      onclick="openfluxSubmit({via:'own-mouse', n: 7})">Go</button></body></html>"""
+                "/other" -> """<!doctype html><html><head><title>other</title></head><body>other origin</body></html>"""
                 else -> """<!doctype html><html><head><title>OF-LIVE</title></head><body style="margin:0;background:#fff">
                     <div id="box" style="position:absolute;left:50px;top:50px;width:300px;height:200px;background:rgb(255,0,0)">red</div>
                     <script>document.getElementById('box').dataset.js='ran'</script></body></html>"""
@@ -253,6 +259,72 @@ class BuiltInBrowserLiveTest {
                 val lateInk = snap(late, "late-attach")
                 check("a page loaded off-screen is painted once attached", lateInk > 300, "non-white samples=$lateInk")
                 late.close()
+                // ---- 11. the script's own server page (openOwn): bridge after load, bound to its origin ----
+                val subs = Collections.synchronizedList(mutableListOf<String>())
+                val collector3 = CoroutineScope(Dispatchers.Default).launch { BuiltInBrowser.submissions.collect { subs += it } }
+                delay(300)
+                val own = BuiltInBrowser.openOwn("$base/own")
+                SwingUtilities.invokeAndWait {
+                    frame!!.contentPane.removeAll(); frame!!.contentPane.add(own.component); frame!!.contentPane.revalidate()
+                }
+                check("own-server page loads", own.settled(), own.url)
+                delay(1000)
+                check("window.openfluxSubmit is defined once the page has loaded", own.evaluate("typeof window.openfluxSubmit") == "function")
+                check("openflux-ready fired for a page that listens", own.evaluate("window.readyFired") == "true")
+                val ownComp = own.component
+                fun click(c: java.awt.Component, x: Int, y: Int) {
+                    fun send(id: Int) = SwingUtilities.invokeAndWait {
+                        c.dispatchEvent(MouseEvent(c, id, System.currentTimeMillis(), if (id == MouseEvent.MOUSE_PRESSED) MouseEvent.BUTTON1_DOWN_MASK else 0, x, y, 1, false, MouseEvent.BUTTON1))
+                    }
+                    send(MouseEvent.MOUSE_MOVED); kotlinx.coroutines.runBlocking { delay(100) }
+                    send(MouseEvent.MOUSE_PRESSED); kotlinx.coroutines.runBlocking { delay(60) }
+                    send(MouseEvent.MOUSE_RELEASED)
+                }
+                click(ownComp, 200, 140)
+                withTimeoutOrNull(5000) { while (subs.none { "own-mouse" in it }) delay(50) }
+                val ownSub = subs.firstOrNull { "own-mouse" in it }.orEmpty()
+                check("a click on the script's own page submits", "\"via\":\"own-mouse\"" in ownSub && "\"n\":7" in ownSub, ownSub)
+
+                // The bridge belongs to the page's own address: after leaving it, nothing it sends is heard.
+                subs.clear()
+                val before = problems.size
+                own.load("http://localhost:${http.address.port}/other")
+                delay(800)
+                check("the other origin loads", own.settled() && own.url.startsWith("http://localhost:"), own.url)
+                check("the bridge is not injected into another origin", own.evaluate("typeof window.openfluxSubmit") == "undefined")
+                own.evaluate("window.openfluxQuery({request: 'submit|{\"stolen\":\"1\"}', onSuccess: function () {}, onFailure: function () {}})")
+                delay(1200)
+                check("a submission from another origin is dropped", subs.isEmpty(), subs.toString())
+                check("and the drop is logged", problems.drop(before).any { "отброшены" in it })
+                own.close()
+
+                // A normal page (open()) is never a setup page, even though the query channel exists in it.
+                val plain = BuiltInBrowser.open("$base/other")
+                check("a plain page loads", plain.settled(), plain.url)
+                plain.evaluate("window.openfluxQuery({request: 'submit|{\"stolen\":\"2\"}', onSuccess: function () {}, onFailure: function () {}})")
+                delay(1200)
+                check("a plain page cannot submit", subs.isEmpty(), subs.toString())
+                plain.close()
+
+                // Only loopback http is an own server's address.
+                for (bad in listOf("https://example.com/", "http://example.com:80/", "http://127.0.0.1/", "file:///etc/passwd")) {
+                    val refused = runCatching { BuiltInBrowser.openOwn(bad) }.exceptionOrNull() is IllegalArgumentException
+                    check("openOwn refuses $bad", refused)
+                }
+
+                // ---- 12. an inline page has the bridge before its own scripts ----
+                val early = BuiltInBrowser.openHtml(
+                    "<!doctype html><html><head><title>t</title></head><body><script>window.early = typeof window.openfluxSubmit; window.ready = false; " +
+                        "window.addEventListener('openflux-ready', function () { window.ready = true; });</script></body></html>",
+                )
+                check("inline page loads", early.settled(), early.url.take(30))
+                delay(500)
+                check("inline page: openfluxSubmit exists before the page's own scripts", early.evaluate("window.early") == "function")
+                check("inline page: openflux-ready fires for its listener", early.evaluate("window.ready") == "true")
+                check("inline page keeps standards mode (doctype first)", early.evaluate("document.compatMode") == "CSS1Compat")
+                early.close()
+                collector3.cancel()
+
                 BuiltInBrowser.clearCookies()
             }
         } finally {
