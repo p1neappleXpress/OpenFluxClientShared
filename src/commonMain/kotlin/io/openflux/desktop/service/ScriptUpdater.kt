@@ -82,6 +82,9 @@ class ScriptUpdater(
             decode(platform.applyScriptUpdate(installedJson(s), channel, scripts.dirPath, allowWireBreak))
         }
         if (report.installed) {
+            // An official transport may move to another official key: the core
+            // checked it, the record has to follow or the file would no longer load.
+            if (report.newKey.isNotBlank()) scripts.repin(id, report.newKey, platform.scriptFingerprint(report.newKey))
             scripts.refresh(id)
             _reports.update { it - id }
         } else {

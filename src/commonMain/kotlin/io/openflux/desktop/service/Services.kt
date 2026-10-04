@@ -55,6 +55,9 @@ interface ScriptRepository {
     /** Whether the version this one replaced is still on disk, so a rollback is possible. */
     fun hasPrevious(id: String): Boolean = false
 
+    /** Pins the install to another author key, after the core accepted an update signed by it (a rotation of OpenFlux's own keys). */
+    fun repin(id: String, pubkeyHex: String, fingerprint: String) {}
+
     /**
      * Verifies a downloaded transport ([data] a .flux or bare .js, [sig] the
      * detached signature for a .js) against [pubkeyHex] and, only if the

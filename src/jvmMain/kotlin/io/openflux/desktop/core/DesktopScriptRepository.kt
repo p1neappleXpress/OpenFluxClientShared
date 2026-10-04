@@ -103,6 +103,13 @@ class DesktopScriptRepository(private val platform: PlatformServices) : ScriptRe
 
     override val dirPath: String get() = dir.absolutePath
 
+    override fun repin(id: String, pubkeyHex: String, fingerprint: String) {
+        _scripts.value = _scripts.value.map {
+            if (it.id == id) it.copy(pubkeyHex = pubkeyHex, fingerprint = fingerprint) else it
+        }
+        persist()
+    }
+
     override fun hasPrevious(id: String): Boolean = byId(id)?.let { File(dir, it.fileName + ".prev").exists() } == true
 
     override fun refresh(id: String): InstalledScript? {

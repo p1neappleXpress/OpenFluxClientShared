@@ -81,6 +81,8 @@ data class ScriptUpdateReport(
     val notes: String = "",
     val official: Boolean = false,
     val autoOk: Boolean = false,
+    /** Set when the update was signed by another of OpenFlux's own keys (a key rotation): pin the install to it. */
+    val newKey: String = "",
 ) {
     val available: Boolean get() = status == "available"
     val blocked: Boolean get() = status == "blocked"
