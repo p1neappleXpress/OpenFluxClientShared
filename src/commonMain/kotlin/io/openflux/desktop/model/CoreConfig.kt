@@ -8,13 +8,19 @@ data class CorePaths(
     val ipcSocket: String?,
 )
 
-/** A SCRIPT carrier's on-disk path + pinned key, resolved by the platform layer for CoreConfig.build/session. */
+/**
+ * A SCRIPT carrier's on-disk path + pinned key, resolved by the platform
+ * layer for CoreConfig.build/session - facts about the installed FILE, the
+ * same for every carrier using it. What the carrier itself saved (profile
+ * value, settings wizard) travels on the carrier/spec instead; see
+ * [ExtraTransport.settings].
+ */
 data class ScriptCarrierLookup(
     val path: String,
     val pubkeyHex: String,
     val name: String,
-    /** What the user saved in the script's settings wizard; the script gets it as cfg.params. */
-    val settings: Map<String, String> = emptyMap(),
+    /** [InstalledScript.primaryParam]'s key, null when the script has none. */
+    val primaryParamKey: String? = null,
 )
 
 /** How to start the core for a profile: the .conf body (Session) and flags. */
@@ -101,8 +107,12 @@ object CoreConfig {
                     appendLine("Path = ${confValue(carrier.path)}")
                     appendLine("Pubkey = ${confValue(carrier.pubkeyHex)}")
                     appendLine("Name = ${confValue(carrier.name)}")
+                    // The profile param's own value rides along under its declared key too,
+                    // mirroring the URL line above: a script that reads cfg.params[key]
+                    // instead of cfg.url sees the one the profile editor's field saved.
+                    val merged = spec.settings + (carrier.primaryParamKey?.let { mapOf(it to spec.value) } ?: emptyMap())
                     // The saved settings ride as one line: a .conf value ends at '#' or ';' and a setting may hold either.
-                    if (carrier.settings.isNotEmpty()) appendLine("Params = ${ScriptSettingsCodec.encode(carrier.settings)}")
+                    if (merged.isNotEmpty()) appendLine("Params = ${ScriptSettingsCodec.encode(merged)}")
                 }
             }
             // The exit listens for direct only when the profile has it; its

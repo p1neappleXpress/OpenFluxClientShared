@@ -48,6 +48,12 @@ enum class ScriptSource(val label: String) {
  * re-verifies the signature against [pubkeyHex] every time it loads the file,
  * so a swapped file on disk fails closed - this record is for the UI and for
  * building the carrier, not a trust shortcut.
+ *
+ * Its saved VALUES (what the user typed in the profile's field or the
+ * settings wizard) are not here: a script is installed once but used by any
+ * number of profiles/carriers, each with its own, so they live on the carrier
+ * itself ([ExtraTransport.settings], [Profile.settings]) and reach the core
+ * from there - one record per carrier, not a global one shared by all of them.
  */
 @Serializable
 data class InstalledScript(
@@ -69,8 +75,6 @@ data class InstalledScript(
     val params: List<ScriptParam> = emptyList(),
     /** The script brings a settings page of its own (Transport.settings), so it has settings even with none declared. */
     val settingsPage: Boolean = false,
-    /** What the user saved in the settings wizard; the script gets it as cfg.params (defaults fill what is missing). */
-    val settings: Map<String, String> = emptyMap(),
     val source: ScriptSource = ScriptSource.File,
     /** URL or repo reference it was added from, for updates and display. */
     val origin: String = "",
@@ -93,15 +97,17 @@ data class InstalledScript(
     val primaryParam: ScriptParam?
         get() = if (params.any { it.scope.isNotEmpty() }) params.firstOrNull { it.scope == "profile" } else params.firstOrNull()
 
-    /** The params the settings wizard asks for: everything but [primaryParam]. */
+    /**
+     * [params] besides [primaryParam] - "the other settings" for a summary
+     * next to the profile's own field. The wizard page itself asks for every
+     * param, [primaryParam] included: both it and the profile editor's field
+     * read and write the one value a profile (or, extra carrier) keeps for it.
+     */
     val settingParams: List<ScriptParam>
         get() = if (params.any { it.scope.isNotEmpty() }) params.filter { it.scope == "settings" } else params.drop(1)
 
-    /** Whether the wizard has anything to show. */
-    val hasSettings: Boolean get() = settingParams.isNotEmpty() || settingsPage
-
-    /** "3 из 5" style summary: how many of the declared settings are set (a default counts as not set). */
-    val settingsFilled: Int get() = settingParams.count { settings[it.key].orEmpty().isNotBlank() }
+    /** Whether there is anything the wizard can open - even just [primaryParam]. */
+    val hasSettings: Boolean get() = params.isNotEmpty() || settingsPage
 
     /** Fingerprint grouped for display: "ab cd ef 12 …". */
     val shortFingerprint: String

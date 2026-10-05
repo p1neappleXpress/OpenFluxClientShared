@@ -58,9 +58,6 @@ interface ScriptRepository {
     /** Pins the install to another author key, after the core accepted an update signed by it (a rotation of OpenFlux's own keys). */
     fun repin(id: String, pubkeyHex: String, fingerprint: String) {}
 
-    /** Keeps what the settings wizard returned for [id]; the script gets it as cfg.params from its next start. */
-    fun saveSettings(id: String, values: Map<String, String>) {}
-
     /**
      * The installed file and its detached signature (empty for a .flux): what
      * the core reads to build the settings page. Null when it is gone.
@@ -93,9 +90,6 @@ class InMemoryScriptRepository : ScriptRepository {
     override fun delete(id: String) { _scripts.value = _scripts.value.filterNot { it.id == id } }
     override fun setEnabled(id: String, enabled: Boolean) {
         _scripts.value = _scripts.value.map { if (it.id == id) it.copy(enabled = enabled) else it }
-    }
-    override fun saveSettings(id: String, values: Map<String, String>) {
-        _scripts.value = _scripts.value.map { if (it.id == id) it.copy(settings = values) else it }
     }
 }
 

@@ -16,6 +16,6 @@ class DesktopScriptRepository(platform: PlatformServices) :
 
     /** The on-disk file + pinned key for a carrier, resolved for CoreConfig; null when the script is gone. */
     fun carrier(id: String): ScriptCarrierLookup? = byId(id)?.let {
-        ScriptCarrierLookup(path = File(dir, it.fileName).absolutePath, pubkeyHex = it.pubkeyHex, name = it.id, settings = it.settings)
+        ScriptCarrierLookup(path = File(dir, it.fileName).absolutePath, pubkeyHex = it.pubkeyHex, name = it.id, primaryParamKey = it.primaryParam?.key)
     }
 }

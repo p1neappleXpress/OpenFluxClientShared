@@ -145,7 +145,6 @@ fun ScriptsScreen(container: AppContainer) {
                     onDelete = { container.scripts.delete(s.id) },
                     onCopy = { container.platform.setClipboardText(s.fingerprint) },
                     onUpdate = { updateFor = s.id },
-                    onSettings = { container.scriptSettings.open(s.id) },
                     onRollback = {
                         scope.launch {
                             val r = updater.rollback(s.id)
@@ -277,7 +276,6 @@ private fun ScriptCard(
     onDelete: () -> Unit,
     onCopy: () -> Unit,
     onUpdate: () -> Unit,
-    onSettings: () -> Unit,
     onRollback: () -> Unit,
 ) {
     AppCard {
@@ -307,16 +305,16 @@ private fun ScriptCard(
         }
         if (script.hasSettings) {
             Spacer(Modifier.height(AppTheme.spacing.s))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                val total = script.settingParams.size
-                Text(
-                    if (total == 0) "Своя страница настроек" else "Настроено ${script.settingsFilled} из $total",
-                    style = AppTheme.typography.caption,
-                    color = AppTheme.colors.textSecondary,
-                    modifier = Modifier.weight(1f),
-                )
-                AppButton("Настройки", onSettings, style = ButtonStyle.Secondary, enabled = !busy)
-            }
+            Text(
+                if (script.settingsPage) "Своя страница настроек" else "Параметров: ${script.params.size}",
+                style = AppTheme.typography.caption,
+                color = AppTheme.colors.textSecondary,
+            )
+            Text(
+                "Настраивается в профиле, который использует этот транспорт",
+                style = AppTheme.typography.caption,
+                color = AppTheme.colors.textSecondary,
+            )
         }
         if (report != null && (report.available || report.blocked || report.failed)) {
             Spacer(Modifier.height(AppTheme.spacing.s))

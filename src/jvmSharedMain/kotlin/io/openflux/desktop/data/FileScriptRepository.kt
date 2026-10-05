@@ -114,11 +114,6 @@ abstract class FileScriptRepository(
         persist()
     }
 
-    override fun saveSettings(id: String, values: Map<String, String>) {
-        _scripts.value = _scripts.value.map { if (it.id == id) it.copy(settings = values) else it }
-        persist()
-    }
-
     override fun packageBytes(id: String): Pair<ByteArray, ByteArray>? {
         val s = byId(id) ?: return null
         val file = File(dir, s.fileName).takeIf { it.exists() } ?: return null

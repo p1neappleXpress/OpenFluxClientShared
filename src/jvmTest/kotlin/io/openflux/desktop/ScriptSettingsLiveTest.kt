@@ -85,6 +85,16 @@ class ScriptSettingsLiveTest {
         assertTrue(installed.hasSettings)
 
         val service = ScriptSettingsService(repo, platform, KcefSettingsPageHost, CoroutineScope(SupervisorJob() + Dispatchers.Default))
+        // Stands in for the carrier (what a profile's field and its settings
+        // keep): the wizard now asks for the profile param too, under its own
+        // key, so this is what open() prefills with and what save() updates -
+        // one value, whichever side touched it.
+        var profileValue = "https://doc.example/d"
+        var settings = emptyMap<String, String>()
+        fun open() = service.open("live-demo", settings + ("url" to profileValue)) { saved ->
+            profileValue = saved["url"] ?: profileValue
+            settings = saved - "url"
+        }
         var frame: JFrame? = null
         try {
             runBlocking {
@@ -102,61 +112,63 @@ class ScriptSettingsLiveTest {
                     frame = JFrame("settings").apply { contentPane.add(p.component); setSize(800, 700); isVisible = true }
                 }
 
-                // ---- first open: defaults in, nothing saved ----
-                service.open("live-demo")
+                // ---- first open: the profile param is here too (f0), prefilled from the
+                // carrier's current value; the declared defaults fill the rest ----
+                open()
                 var p = page(); show(p); p.settled()
-                assertEquals("3", p.evaluate("document.getElementById('f1').value"), "a declared default prefills the form")
-                assertEquals("", p.evaluate("document.getElementById('f0').value"))
+                assertEquals("https://doc.example/d", p.evaluate("document.getElementById('f0').value"), "the profile's own field prefills the wizard too")
+                assertEquals("3", p.evaluate("document.getElementById('f2').value"), "a declared default prefills the form")
+                assertEquals("", p.evaluate("document.getElementById('f1').value"))
                 assertEquals("Live-demo".lowercase(), p.evaluate("document.querySelector('h1').textContent").lowercase())
 
                 // Save with the required token empty: the page refuses, nothing is saved
                 p.evaluate("(function(){document.getElementById('save').click(); return 1})()")
                 delay(500)
-                assertTrue(repo.byId("live-demo")!!.settings.isEmpty(), "a required field left empty must not save")
-                assertEquals("true", p.evaluate("String(document.getElementById('f0').closest('.field').classList.contains('bad'))"))
+                assertTrue(settings.isEmpty(), "a required field left empty must not save")
+                assertEquals("true", p.evaluate("String(document.getElementById('f1').closest('.field').classList.contains('bad'))"))
 
-                // fill it in the way a user does, then Save
+                // fill it in the way a user does (including a new document URL), then Save
                 p.evaluate(
                     """(function(){
                         function set(id, v){var e=document.getElementById(id); e.value=v; e.dispatchEvent(new Event('input',{bubbles:true}));}
-                        set('f0','s3cr#t;1'); set('f1','7'); set('f2','b'); set('f3','line one\nline two');
+                        set('f0','https://doc.example/e'); set('f1','s3cr#t;1'); set('f2','7'); set('f3','b'); set('f4','line one\nline two');
                         document.getElementById('save').click(); return 1})()""",
                 )
-                withTimeoutOrNull(5_000) { while (repo.byId("live-demo")!!.settings.isEmpty()) delay(50) }
-                val saved = repo.byId("live-demo")!!.settings
+                withTimeoutOrNull(5_000) { while (settings.isEmpty()) delay(50) }
                 assertEquals(
-                    mapOf("token" to "s3cr#t;1", "retries" to "7", "mode" to "b", "notes" to "line one\nline two"), saved,
-                    "what the page submitted is what the repository keeps",
+                    mapOf("token" to "s3cr#t;1", "retries" to "7", "mode" to "b", "notes" to "line one\nline two"), settings,
+                    "what the page submitted is what the caller keeps",
                 )
+                assertEquals("https://doc.example/e", profileValue, "the profile field changed from the wizard too - one value, either editor")
                 assertNull(service.state.value, "the dialog closes once the page has saved")
 
-                // ---- second open: prefilled from what was saved ----
-                service.open("live-demo")
+                // ---- second open: prefilled from what was saved, profile field included ----
+                open()
                 p = page(); show(p); p.settled()
-                assertEquals("s3cr#t;1", p.evaluate("document.getElementById('f0').value"))
-                assertEquals("7", p.evaluate("document.getElementById('f1').value"))
-                assertEquals("b", p.evaluate("document.getElementById('f2').value"))
+                assertEquals("https://doc.example/e", p.evaluate("document.getElementById('f0').value"))
+                assertEquals("s3cr#t;1", p.evaluate("document.getElementById('f1').value"))
+                assertEquals("7", p.evaluate("document.getElementById('f2').value"))
+                assertEquals("b", p.evaluate("document.getElementById('f3').value"))
                 service.close()
 
                 // ---- an out-of-range number is refused by the page ----
-                service.open("live-demo")
+                open()
                 p = page(); show(p); p.settled()
-                p.evaluate("(function(){var e=document.getElementById('f1'); e.value='11'; e.dispatchEvent(new Event('input',{bubbles:true})); document.getElementById('save').click(); return 1})()")
+                p.evaluate("(function(){var e=document.getElementById('f2'); e.value='11'; e.dispatchEvent(new Event('input',{bubbles:true})); document.getElementById('save').click(); return 1})()")
                 delay(500)
-                assertEquals("7", repo.byId("live-demo")!!.settings["retries"], "11 is over the declared max")
+                assertEquals("7", settings["retries"], "11 is over the declared max")
                 service.close()
             }
 
             // ---- the saved settings through the generated .conf into a real core process ----
-            val settings = repo.byId("live-demo")!!.settings
             val key = File(dir, "key").apply { writeText("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n") }
             val profile = Profile(
-                id = "p", name = "P", transport = TransportType.SCRIPT, value = "https://doc.example/d", session = true,
-                secret = "0123456789abcdef0123456789abcdef", scriptId = "live-demo",
+                id = "p", name = "P", transport = TransportType.SCRIPT, value = profileValue, session = true,
+                secret = "0123456789abcdef0123456789abcdef", scriptId = "live-demo", settings = settings,
             )
             val paths = CorePaths(keyFile = key.absolutePath, confFile = File(dir, "p.conf").absolutePath, cookieStore = File(dir, "cookies.json").absolutePath, ipcSocket = null)
             val launch = CoreConfig.build(profile, AppSettings(socksPort = 19181), paths) { id ->
-                repo.byId(id)?.let { ScriptCarrierLookup(File(repo.dir, it.fileName).absolutePath, it.pubkeyHex, it.id, it.settings) }
+                repo.byId(id)?.let { ScriptCarrierLookup(File(repo.dir, it.fileName).absolutePath, it.pubkeyHex, it.id, it.primaryParam?.key) }
             }
             File(paths.confFile).writeText(launch.conf!!)
             val process = ProcessBuilder(listOf(core.absolutePath) + launch.arguments).redirectErrorStream(true).start()
@@ -169,7 +181,8 @@ class ScriptSettingsLiveTest {
             assertTrue(""""token":"s3cr#t;1"""" in line, line)
             assertTrue(""""retries":"7"""" in line && """"mode":"b"""" in line, line)
             assertTrue("""\n""" in line && "line one" in line, "a multi-line setting survives the .conf: $line")
-            assertTrue("URL https://doc.example/d" in line, "the profile's own input is still cfg.url: $line")
+            assertTrue("URL https://doc.example/e" in line, "the profile's own input is still cfg.url: $line")
+            assertTrue(""""url":"https://doc.example/e"""" in line, "and the same value also reaches cfg.params[url]: $line")
         } finally {
             SwingUtilities.invokeAndWait { frame?.dispose() }
             dir.deleteRecursively()

@@ -15,6 +15,13 @@ data class ExtraTransport(
     val priority: Int = 50,
     /** Which installed script this carrier uses, when [type] is SCRIPT. */
     val scriptId: String = "",
+    /**
+     * What this carrier saved in the script's settings wizard, besides [value]
+     * (its own [InstalledScript.primaryParam], when the script has one). The
+     * wizard shows and saves both together - editing either the field above or
+     * the wizard changes the one value a param stands for.
+     */
+    val settings: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -35,6 +42,8 @@ data class Profile(
     val value: String = "",
     /** Which installed script the main transport uses, when [transport] is SCRIPT. */
     val scriptId: String = "",
+    /** The main carrier's saved script settings; see [ExtraTransport.settings]. */
+    val settings: Map<String, String> = emptyMap(),
     /** MAX user id (oneme only). */
     val uid: String = "",
     val secret: String = "",
@@ -57,7 +66,7 @@ data class Profile(
 ) {
     /** Every carrier of the profile, main first. */
     val carriers: List<ExtraTransport>
-        get() = listOf(ExtraTransport(transport, value, uid, priority, scriptId)) + if (session) extras else emptyList()
+        get() = listOf(ExtraTransport(transport, value, uid, priority, scriptId, settings)) + if (session) extras else emptyList()
 
     val summary: String
         get() = when {
@@ -112,6 +121,7 @@ data class Profile(
                 uid = carrier.uid.trim(),
                 priority = carrier.priority,
                 scriptId = carrier.scriptId,
+                settings = carrier.settings,
             )
         }
     }
@@ -249,4 +259,6 @@ data class SessionSpec(
     val uid: String,
     val priority: Int,
     val scriptId: String = "",
+    /** The carrier's own saved script settings; see [ExtraTransport.settings]. */
+    val settings: Map<String, String> = emptyMap(),
 )

@@ -50,10 +50,13 @@ data class ScriptSettingsState(
 
 /**
  * The "Настройки" of an installed script transport. The core builds the page
- * (the script's own, else the form generated from what the script declares),
- * the platform's built-in browser shows it, and what it submits is saved with
- * the script: the script gets it as cfg.params the next time it starts. It
- * never involves a running connection.
+ * (the script's own, else the form generated from what the script declares -
+ * every param, including the one the profile editor's field also asks for),
+ * the platform's built-in browser shows it, and what it submits is handed to
+ * [onSave] for the caller to keep: it is the carrier that saved it (a profile
+ * or one of its extras), never the installed script itself, since the same
+ * script can back any number of carriers with different values. Never
+ * involves a running connection.
  */
 class ScriptSettingsService(
     private val scripts: ScriptRepository,
@@ -65,17 +68,27 @@ class ScriptSettingsService(
     val state: StateFlow<ScriptSettingsState?> = _state.asStateFlow()
 
     private var token = 0
+    private var onSave: ((Map<String, String>) -> Unit)? = null
 
-    fun open(scriptId: String) {
+    /**
+     * Opens scriptId's wizard prefilled from currentValues - the carrier's own
+     * [ExtraTransport.settings] plus its value under [InstalledScript.primaryParam]'s
+     * key, if it has one, so that field's current value shows here too.
+     * [onSave] gets exactly what the page submitted (that same key included
+     * when the script has a profile param): the caller splits it back into the
+     * carrier's value/settings itself, this service does not know which.
+     */
+    fun open(scriptId: String, currentValues: Map<String, String>, onSave: (Map<String, String>) -> Unit) {
         val script = scripts.byId(scriptId) ?: return
         close()
         val mine = ++token
+        this.onSave = onSave
         _state.value = ScriptSettingsState(scriptId, script.name)
         scope.launch {
             val answer = withContext(Dispatchers.IO) {
                 val pkg = scripts.packageBytes(scriptId)
                     ?: return@withContext ScriptSettingsPage(ok = false, code = "failed", error = "файл скрипта не найден")
-                val values = JsonObject(script.settings.mapValues { JsonPrimitive(it.value) })
+                val values = JsonObject(currentValues.mapValues { JsonPrimitive(it.value) })
                 ScriptSettingsPage.parse(platform.scriptSettings(pkg.first, pkg.second, script.pubkeyHex, values.toString(), "ru"))
             }
             if (token != mine) return@launch
@@ -88,7 +101,7 @@ class ScriptSettingsService(
                 host.open(
                     answer.html,
                     onStep = { step -> if (token == mine) _state.update { it?.copy(progress = step) } },
-                    onSubmit = { json -> if (token == mine) save(scriptId, json, declared) },
+                    onSubmit = { json -> if (token == mine) save(json, declared) },
                 )
             }
             if (token != mine) {
@@ -100,8 +113,8 @@ class ScriptSettingsService(
         }
     }
 
-    /** What the wizard's Save handed over: kept with the script, the dialog closes. */
-    private fun save(scriptId: String, json: String, declared: Set<String>) {
+    /** What the wizard's Save handed over: passed to [onSave], the dialog closes. */
+    private fun save(json: String, declared: Set<String>) {
         val values = try {
             SetupPages.flatten(json)
         } catch (e: IllegalArgumentException) {
@@ -110,13 +123,14 @@ class ScriptSettingsService(
         }
         // Only what the script declares (a custom page may send more; it would only be noise in cfg.params).
         val kept = if (declared.isEmpty()) values else values.filterKeys { it in declared }
-        scripts.saveSettings(scriptId, kept)
+        onSave?.invoke(kept)
         close()
     }
 
     /** Closes the dialog and its page. */
     fun close() {
         token++
+        onSave = null
         val current = _state.value
         _state.value = null
         current?.page?.let(host::close)

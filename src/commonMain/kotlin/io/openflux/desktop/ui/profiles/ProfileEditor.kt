@@ -184,11 +184,15 @@ fun ProfileEditor(model: ProfilesScreenModel, state: EditorState, onBack: (() ->
                     SectionLabel(if (draft.session) "Основной транспорт" else "Транспорт")
                     Spacer(Modifier.height(AppTheme.spacing.m))
                     CarrierFields(
-                        carrier = ExtraTransport(draft.transport, draft.value, draft.uid, draft.priority, draft.scriptId),
+                        carrier = ExtraTransport(draft.transport, draft.value, draft.uid, draft.priority, draft.scriptId, draft.settings),
                         session = draft.session,
                         showPriority = draft.session,
                         stream = draft.stream,
-                        onChange = { c -> model.updateDraft { it.copy(transport = c.type, value = c.value, uid = c.uid, priority = c.priority, scriptId = c.scriptId) } },
+                        onChange = { c ->
+                            model.updateDraft {
+                                it.copy(transport = c.type, value = c.value, uid = c.uid, priority = c.priority, scriptId = c.scriptId, settings = c.settings)
+                            }
+                        },
                     )
                     if (!draft.session && !draft.stream) {
                         Spacer(Modifier.height(AppTheme.spacing.l))
@@ -313,13 +317,31 @@ private fun CarrierFields(carrier: ExtraTransport, session: Boolean, showPriorit
             val container = LocalAppContainer.current
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.m)) {
                 val total = script.settingParams.size
-                Text(
-                    if (total == 0) "У скрипта своя страница настроек" else "Настройки скрипта: ${script.settingsFilled} из $total",
-                    style = AppTheme.typography.caption,
-                    color = AppTheme.colors.textSecondary,
-                    modifier = Modifier.weight(1f),
+                if (total > 0 || script.settingsPage) {
+                    val filled = script.settingParams.count { carrier.settings[it.key].orEmpty().isNotBlank() }
+                    Text(
+                        if (script.settingsPage) "У скрипта своя страница настроек" else "Настройки скрипта: $filled из $total",
+                        style = AppTheme.typography.caption,
+                        color = AppTheme.colors.textSecondary,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+                TextAction(
+                    "Открыть настройки",
+                    {
+                        // Prefilled with the carrier's own value too, under the profile
+                        // param's key: the wizard edits the same value the field above
+                        // does. Save splits the result back the same way.
+                        val current = carrier.settings + (scriptParam?.key?.let { mapOf(it to carrier.value) } ?: emptyMap())
+                        container.scriptSettings.open(script.id, current) { saved ->
+                            val newValue = scriptParam?.key?.let { saved[it] } ?: carrier.value
+                            val newSettings = scriptParam?.key?.let { saved - it } ?: saved
+                            onChange(carrier.copy(value = newValue, settings = newSettings))
+                        }
+                    },
                 )
-                TextAction("Открыть настройки", { container.scriptSettings.open(script.id) })
             }
         }
         if (carrier.type == TransportType.ONEME) {

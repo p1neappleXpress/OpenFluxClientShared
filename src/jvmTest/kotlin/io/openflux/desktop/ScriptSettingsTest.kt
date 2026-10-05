@@ -54,21 +54,17 @@ class ScriptSettingsTest {
         assertTrue(params[0].required && params[0].type == "secret")
     }
 
-    private fun script(vararg params: ScriptParam, settings: Map<String, String> = emptyMap(), page: Boolean = false) = InstalledScript(
+    private fun script(vararg params: ScriptParam, page: Boolean = false) = InstalledScript(
         id = "demo", name = "Demo", pubkeyHex = "aa", fingerprint = "bb", fileName = "demo.js",
-        params = params.toList(), settings = settings, settingsPage = page,
+        params = params.toList(), settingsPage = page,
     )
 
     @Test
     fun theProfilesInputAndTheSettingsAreTelledApart() {
-        val s = script(
-            ScriptParam("url", scope = "profile"), ScriptParam("token", scope = "settings"), ScriptParam("n", scope = "settings"),
-            settings = mapOf("token" to "t"),
-        )
+        val s = script(ScriptParam("url", scope = "profile"), ScriptParam("token", scope = "settings"), ScriptParam("n", scope = "settings"))
         assertEquals("url", s.primaryParam?.key)
         assertEquals(listOf("token", "n"), s.settingParams.map { it.key })
         assertTrue(s.hasSettings)
-        assertEquals(1, s.settingsFilled)
 
         // only settings declared: the profile has no value field
         val onlySettings = script(ScriptParam("a", scope = "settings"))
@@ -79,9 +75,11 @@ class ScriptSettingsTest {
         assertEquals("url", legacy.primaryParam?.key)
         assertEquals(listOf("extra"), legacy.settingParams.map { it.key })
 
-        // a script with nothing declared still has settings when it brings its own page
-        assertFalse(script(ScriptParam("url", scope = "profile")).hasSettings)
-        assertTrue(script(ScriptParam("url", scope = "profile"), page = true).hasSettings)
+        // even a lone profile param gets a wizard now (just itself) - the field and
+        // the wizard edit the one value; only a script with nothing at all does not
+        assertFalse(script().hasSettings)
+        assertTrue(script(ScriptParam("url", scope = "profile")).hasSettings)
+        assertTrue(script(page = true).hasSettings)
     }
 
     @Test
@@ -115,14 +113,20 @@ class ScriptSettingsTest {
 
         val profile = Profile(
             id = "p", name = "P", transport = TransportType.SCRIPT, value = "https://doc.example/d", session = true,
-            secret = "0123456789abcdef0123456789abcdef", scriptId = "demo",
+            secret = "0123456789abcdef0123456789abcdef", scriptId = "demo", settings = settings,
         )
         val paths = CorePaths(keyFile = "/k", confFile = "/c", cookieStore = "/s", ipcSocket = null)
-        fun conf(lookup: ScriptCarrierLookup) = CoreConfig.build(profile, AppSettings(), paths) { lookup }.conf.orEmpty()
-        val with = conf(ScriptCarrierLookup("/p.flux", "aa", "demo", settings))
+        fun conf(p: Profile, lookup: ScriptCarrierLookup) = CoreConfig.build(p, AppSettings(), paths) { lookup }.conf.orEmpty()
+        val with = conf(profile, ScriptCarrierLookup("/p.flux", "aa", "demo"))
         assertTrue("Params = $line" in with, with)
         assertTrue("Path = /p.flux" in with && "Name = demo" in with)
-        assertFalse("Params =" in conf(ScriptCarrierLookup("/p.flux", "aa", "demo")), "no settings, no line")
+        val bare = profile.copy(settings = emptyMap())
+        assertFalse("Params =" in conf(bare, ScriptCarrierLookup("/p.flux", "aa", "demo")), "no settings, no line")
+
+        // the profile param's value rides along under its own key too, even
+        // with no other settings saved - the field and the wizard agree
+        val withPrimary = conf(bare, ScriptCarrierLookup("/p.flux", "aa", "demo", primaryParamKey = "url"))
+        assertTrue("Params = ${ScriptSettingsCodec.encode(mapOf("url" to profile.value))}" in withPrimary, withPrimary)
     }
 
     // ---- the service, with the page host and the core stood in for ----
@@ -147,16 +151,11 @@ class ScriptSettingsTest {
 
     private class Repo(installed: InstalledScript) : io.openflux.desktop.service.ScriptRepository {
         private val flow = kotlinx.coroutines.flow.MutableStateFlow(listOf(installed))
-        val saved = mutableListOf<Map<String, String>>()
         override val scripts: kotlinx.coroutines.flow.StateFlow<List<InstalledScript>> = flow
         override fun upsert(script: InstalledScript) { flow.value = flow.value.filterNot { it.id == script.id } + script }
         override fun delete(id: String) { flow.value = flow.value.filterNot { it.id == id } }
         override fun setEnabled(id: String, enabled: Boolean) {}
         override fun packageBytes(id: String) = ByteArray(3) to ByteArray(0)
-        override fun saveSettings(id: String, values: Map<String, String>) {
-            saved += values
-            flow.value = flow.value.map { if (it.id == id) it.copy(settings = values) else it }
-        }
     }
 
     private fun await(cond: () -> Boolean) = runBlocking {
@@ -166,12 +165,14 @@ class ScriptSettingsTest {
 
     @Test
     fun openingShowsTheCoresPageAndSavingKeepsOnlyWhatIsDeclared() {
-        val repo = Repo(script(ScriptParam("url", scope = "profile"), ScriptParam("token", scope = "settings"), settings = mapOf("token" to "old")))
+        val repo = Repo(script(ScriptParam("url", scope = "profile"), ScriptParam("token", scope = "settings")))
         val host = FakeHost()
         val seen = mutableListOf<String>()
         val service = ScriptSettingsService(repo, platform({ report }, seen), host, CoroutineScope(SupervisorJob() + Dispatchers.Default))
+        val saved = mutableListOf<Map<String, String>>()
 
-        service.open("demo")
+        // the carrier's own current value (the profile editor's field) prefills the page too
+        service.open("demo", mapOf("token" to "old")) { saved += it }
         assertEquals("Demo", service.state.value?.title)
         await { service.state.value?.page != null }
         assertEquals("<p>wizard</p>", (service.state.value?.page as FakeHost.Page).html)
@@ -179,7 +180,7 @@ class ScriptSettingsTest {
 
         // the page's Save: a declared key, an undeclared one, a number
         host.submit!!("""{"token":"s3cret","retries":7,"stray":"x"}""")
-        assertEquals(listOf(mapOf("token" to "s3cret", "retries" to "7")), repo.saved)
+        assertEquals(listOf(mapOf("token" to "s3cret", "retries" to "7")), saved, "the caller - not this service - keeps what was saved")
         assertNull(service.state.value, "the dialog closes once the page has saved")
         assertEquals(1, host.closed.size)
     }
@@ -191,7 +192,7 @@ class ScriptSettingsTest {
         val service = ScriptSettingsService(
             repo, platform({ """{"ok":false,"code":"bad_signature","error":"x"}""" }), host, CoroutineScope(SupervisorJob() + Dispatchers.Default),
         )
-        service.open("demo")
+        service.open("demo", emptyMap()) { error("must not be called") }
         await { service.state.value?.error?.isNotEmpty() == true }
         assertTrue("подписью" in service.state.value!!.error)
         assertTrue(host.opened.isEmpty(), "no page without a verified script")
@@ -204,10 +205,11 @@ class ScriptSettingsTest {
         val repo = Repo(script(ScriptParam("url", scope = "profile"), ScriptParam("token", scope = "settings")))
         val host = FakeHost()
         val service = ScriptSettingsService(repo, platform({ report }), host, CoroutineScope(SupervisorJob() + Dispatchers.Default))
-        service.open("demo")
+        val saved = mutableListOf<Map<String, String>>()
+        service.open("demo", emptyMap()) { saved += it }
         await { service.state.value?.page != null }
         host.submit!!("""{"o":{}}""")
-        assertTrue(repo.saved.isEmpty())
+        assertTrue(saved.isEmpty())
         assertNotNull(service.state.value, "the dialog stays so the user can try again")
         assertTrue(service.state.value!!.error.isNotEmpty())
     }
@@ -217,8 +219,8 @@ class ScriptSettingsTest {
         val repo = Repo(script(ScriptParam("token", scope = "settings")))
         val host = FakeHost()
         val service = ScriptSettingsService(repo, platform({ report }), host, CoroutineScope(SupervisorJob() + Dispatchers.Default))
-        service.open("demo")
-        service.open("demo")
+        service.open("demo", emptyMap()) {}
+        service.open("demo", emptyMap()) {}
         await { host.opened.isNotEmpty() && service.state.value?.page != null }
         Thread.sleep(150)
         // whichever pages were opened, only the last is left open
