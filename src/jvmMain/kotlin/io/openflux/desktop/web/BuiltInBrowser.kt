@@ -39,7 +39,6 @@ import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import javax.swing.SwingUtilities
-import kotlin.math.roundToInt
 
 /** A page open in the built-in browser. Close it when done. */
 class KcefPage internal constructor(private val browser: KCEFBrowser) : BrowserPage {
@@ -203,55 +202,71 @@ object BuiltInBrowser {
                 "java ${System.getProperty("java.version")} (${System.getProperty("java.home")}), ${System.getProperty("os.name")} ${System.getProperty("os.arch")}",
         )
         runCatching { BrowserLog.cefLogFile.delete() }
+        // KCEF is never left to download: see RuntimeArchive. It is given the archive
+        // that is already here, or finds the runtime installed and asks for nothing.
+        val runtime = RuntimeArchive(
+            File(dir.parentFile ?: dir, "browser-download"), runtimeFile(), runtimeSources(), RUNTIME_SHA512[runtimeKey()],
+        )
+        val served = if (runtimeInstalled(dir)) null else {
+            // A lock without the runtime (a cleaner took files, a folder half-deleted): KCEF
+            // would trust the lock and fail to start from then on.
+            File(dir, "install.lock").delete()
+            step("Готовлю встроенный браузер…")
+            ArchiveServer(runtime.fetch(step))
+        }
         var error: Throwable? = null
         var restart = false
-        withContext(Dispatchers.IO) {
-            KCEF.init(
-                builder = {
-                    installDir(installDir)
-                    download { custom(packageUrl()) }
-                    progress {
-                        onLocating { step("Готовлю встроенный браузер…") }
-                        onDownloading {
-                            // The CDN does not always say the size: then no percent.
-                            val percent = it.roundToInt()
-                            step("Скачиваю встроенный браузер (около 230 МБ, один раз)…" + if (percent in 1..99) " $percent%" else "")
+        try {
+            withContext(Dispatchers.IO) {
+                KCEF.init(
+                    builder = {
+                        installDir(installDir)
+                        download { custom(served?.url ?: packageUrl()) }
+                        progress {
+                            onLocating { step("Готовлю встроенный браузер…") }
+                            onDownloading { step("Устанавливаю встроенный браузер…") }
+                            onExtracting { step("Распаковываю встроенный браузер…") }
+                            onInitializing { step("Запускаю встроенный браузер…") }
+                            onInitialized { initialized.complete(Unit) }
                         }
-                        onExtracting { step("Распаковываю встроенный браузер…") }
-                        onInitializing { step("Запускаю встроенный браузер…") }
-                        onInitialized { initialized.complete(Unit) }
-                    }
-                    settings {
-                        cachePath = null
-                        locale = "ru-RU"
-                        windowlessRenderingEnabled = true
-                        // The core's own (transport/yandex volgaUserAgent), like the
-                        // Android app's WebViews: Yandex ties a passed check to it.
-                        userAgent = YANDEX_USER_AGENT
-                        // JCEF's defaults point into the running JVM's java.home; empty
-                        // paths make KCEF use the downloaded runtime instead.
-                        resourcesDirPath = null
-                        localesDirPath = null
-                        browserSubProcessPath = helper(dir)
-                        logFile = BrowserLog.cefLogFile.absolutePath
-                        logSeverity = dev.datlag.kcef.KCEFBuilder.Settings.LogSeverity.Info
-                    }
-                    val switches = switches(port, dir)
-                    args(*switches)
-                    // KCEF hands args() only to CefApp.startup; Chromium reads its
-                    // switches from the app handler, which KCEF builds with none. Without
-                    // this the pages went through the system proxy, with the GPU on.
-                    appHandler(KCEF.AppHandler(switches))
-                    BrowserLog.info("ключи Chromium: ${switches.joinToString(" ")}")
-                },
-                onError = { error = it; BrowserLog.problem("ошибка запуска: $it") },
-                onRestartRequired = { restart = true; BrowserLog.problem("KCEF просит перезапуск") },
-            )
+                        settings {
+                            cachePath = null
+                            locale = "ru-RU"
+                            windowlessRenderingEnabled = true
+                            // The core's own (transport/yandex volgaUserAgent), like the
+                            // Android app's WebViews: Yandex ties a passed check to it.
+                            userAgent = YANDEX_USER_AGENT
+                            // JCEF's defaults point into the running JVM's java.home; empty
+                            // paths make KCEF use the downloaded runtime instead.
+                            resourcesDirPath = null
+                            localesDirPath = null
+                            browserSubProcessPath = helper(dir)
+                            logFile = BrowserLog.cefLogFile.absolutePath
+                            logSeverity = dev.datlag.kcef.KCEFBuilder.Settings.LogSeverity.Info
+                        }
+                        val switches = switches(port, dir)
+                        args(*switches)
+                        // KCEF hands args() only to CefApp.startup; Chromium reads its
+                        // switches from the app handler, which KCEF builds with none. Without
+                        // this the pages went through the system proxy, with the GPU on.
+                        appHandler(KCEF.AppHandler(switches))
+                        BrowserLog.info("ключи Chromium: ${switches.joinToString(" ")}")
+                    },
+                    onError = { error = it; BrowserLog.problem("ошибка запуска: $it") },
+                    onRestartRequired = { restart = true; BrowserLog.problem("KCEF просит перезапуск") },
+                )
+            }
+        } finally {
+            served?.close()
         }
         BrowserLog.info("файлы: " + listOf("jcef_helper.exe", "jcef_helper", "libcef.dll", "libcef.so", "jcef.dll", "icudtl.dat", "resources.pak", "locales", "Frameworks")
             .filter { File(dir, it).exists() }.joinToString())
-        if (restart) throw IllegalStateException("Встроенный браузер скачан: перезапустите OpenFlux и повторите")
+        // KCEF's restart request helps only when the runtime did get installed. An install that
+        // failed (a locked file, a full disk) is tried again from the archive kept for it, and a
+        // restart would not change that.
+        if (restart && runtimeInstalled(dir)) throw IllegalStateException("Встроенный браузер установлен: перезапустите OpenFlux и повторите")
         error?.let { throw IllegalStateException("Встроенный браузер не запустился: ${it.message ?: it::class.simpleName}") }
+        if (restart) throw IllegalStateException("Встроенный браузер не установился: повторите, скачанное сохранено")
         withTimeoutOrNull(START_TIMEOUT_MS) { initialized.await() }
             ?: throw IllegalStateException("Встроенный браузер не запустился за минуту")
         val created = withTimeoutOrNull(START_TIMEOUT_MS) { KCEF.newClient() }
@@ -276,6 +291,9 @@ object BuiltInBrowser {
         created.addMessageRouter(router)
         watch(created)
         BrowserLog.info("браузер готов: ${runCatching { CefApp.getInstance().version?.toString()?.replace(Regex("\\s+"), " ") }.getOrNull() ?: "?"}")
+        // Started from its own folder: the archive has done its job. Until here it is kept, so a
+        // failed unpacking or start never costs another download.
+        runtime.discard()
         return created
     }
 
@@ -365,6 +383,12 @@ object BuiltInBrowser {
     internal fun packageUrl(
         os: String = System.getProperty("os.name"),
         arch: String = System.getProperty("os.arch"),
+    ): String = "https://cache-redirector.jetbrains.com/intellij-jbr/${runtimeFile(os, arch)}"
+
+    /** "windows-x64": the platform part of the runtime's file name. */
+    internal fun runtimeKey(
+        os: String = System.getProperty("os.name"),
+        arch: String = System.getProperty("os.arch"),
     ): String {
         val platform = when {
             os.startsWith("Windows", ignoreCase = true) -> "windows"
@@ -372,8 +396,41 @@ object BuiltInBrowser {
             else -> "linux"
         }
         val cpu = if (arch.lowercase() in setOf("aarch64", "arm64")) "aarch64" else "x64"
-        return "https://cache-redirector.jetbrains.com/intellij-jbr/jbr_jcef-$JBR_VERSION-$platform-$cpu-$JBR_BUILD.tar.gz"
+        return "$platform-$cpu"
     }
+
+    internal fun runtimeFile(
+        os: String = System.getProperty("os.name"),
+        arch: String = System.getProperty("os.arch"),
+    ): String = "jbr_jcef-$JBR_VERSION-${runtimeKey(os, arch)}-$JBR_BUILD.tar.gz"
+
+    /**
+     * Where the archive may be fetched from, in order of preference: the address in
+     * OPENFLUX_BROWSER_RUNTIME_URL (a mirror a network can reach, or one of the user's own),
+     * then the JetBrains CDN. All serve the same file: it is checked against [RUNTIME_SHA512].
+     */
+    internal fun runtimeSources(env: String? = System.getenv("OPENFLUX_BROWSER_RUNTIME_URL")): List<String> =
+        listOfNotNull(env?.trim()?.takeIf { it.startsWith("http://") || it.startsWith("https://") }) + packageUrl()
+
+    /**
+     * Whether KCEF can start from [dir] as it is: its install lock is only written once everything
+     * was unpacked, and the runtime's own library has to be there as well.
+     */
+    internal fun runtimeInstalled(dir: File): Boolean =
+        File(dir, "install.lock").isFile && listOf("libcef.dll", "libcef.so", "Frameworks").any { File(dir, it).exists() }
+
+    /**
+     * SHA-512 of each runtime archive of [JBR_VERSION] [JBR_BUILD], from the .checksum file JetBrains
+     * publishes beside it. Whoever serves the archive, only these bytes are unpacked and run.
+     */
+    internal val RUNTIME_SHA512 = mapOf(
+        "windows-x64" to "5367cbf1188d29d72574263c55e6e855ddce3d64c1908868d8c273183eaa339f6db0b98fb1b225ba5ac61e8f3365afa71fd0372dc4b72b37cd23dd778bb37940",
+        "windows-aarch64" to "e889c269c5ab247c12293cd018619cfc31b3b8e664a5f2f71f3e8bed3140305eb7219d9596a514e798322cec838ec244b200fc4ac3d43f35f9a099b52822296a",
+        "osx-x64" to "2e8d0cecd41e07a18162633c25592dfd8f32157591b09f487dd7357c1226fbc860d9519eaaf65d6140cc7bfb6bbf957139deac59f47c066684f3785105c2f104",
+        "osx-aarch64" to "6ad87205a87e2921b7fa5389dbdd98a2f33a7013842b9e49c53465dca2bb434cae5f60b12d17edfb5e4f792fac78a8d31e222d611a9b74089e7845cbe977c135",
+        "linux-x64" to "3c8c2c853acacbb096966175aae7967ea1280a7ab43c5e33a6cec17bd22fe0a243431811dcb66cdb6dd141c1144b13edf8b7b6bde1f7ba649749c0e4bd7b5cd8",
+        "linux-aarch64" to "0a34abdd58786b14e4dc2ad56c87a58920337ca8909f5612b45b0cddd7868158beed63a44e8dee6d1ea0eac65ead56e7e788e0d39ba7599749588328feea5995",
+    )
 
     private const val JBR_VERSION = "21.0.6"
     private const val JBR_BUILD = "b895.97"
