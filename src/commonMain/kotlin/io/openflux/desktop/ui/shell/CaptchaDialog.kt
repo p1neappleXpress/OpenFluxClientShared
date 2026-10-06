@@ -27,9 +27,13 @@ import io.openflux.desktop.ui.components.windowSize
 import io.openflux.desktop.ui.theme.AppTheme
 
 /**
- * A Yandex check the core cannot pass by itself. The page opens in the
- * built-in browser (through the node's address when the node asked);
- * "Готово" hands the resulting cookies to the core.
+ * A Yandex check, or a script transport's own setup page, the core cannot
+ * pass/fill by itself. The page opens in the built-in browser (through the
+ * node's address when the node asked). For a real check, "Готово" hands the
+ * resulting cookies to the core; for a script's own page ([CaptchaPrompt.own]:
+ * inline html, or the script's own server on 127.0.0.1) there is no such
+ * button - the page submits itself (window.openfluxSubmit, see the core's
+ * docs/scripted-transports.md), and this dialog just hosts it.
  */
 @Composable
 fun CaptchaDialog() {
@@ -38,24 +42,32 @@ fun CaptchaDialog() {
     val page by connection.captchaPage.collectAsState()
     val browsers = LocalBrowserViews.current
     val current = prompt ?: return
+    val isSetupPage = current.own
     // The check page gets what the window can spare, within reason.
     val window = windowSize()
     val pageHeight = (window.height - 330.dp).coerceIn(180.dp, 640.dp)
     AppDialog(
         modifier = Modifier.fillUpTo(if (window.width >= 1400.dp) 960.dp else 760.dp),
-        title = if (current.remote) "Нода просит пройти проверку Яндекса" else "Яндекс просит пройти проверку",
+        title = when {
+            // For a script's own page the reason is the title its author wrote.
+            isSetupPage -> current.reason.ifBlank {
+                if (current.transport.isNotBlank()) "Настройка «${current.transport}»" else "Транспорт просит настройку"
+            }
+            current.remote -> "Нода просит пройти проверку Яндекса"
+            else -> "Яндекс просит пройти проверку"
+        },
         onDismiss = connection::dismissCaptcha,
-        primary = if (current.busy) "Передаю…" else "Готово, проверка пройдена",
+        primary = if (isSetupPage) null else if (current.busy) "Передаю…" else "Готово, проверка пройдена",
         onPrimary = connection::submitCaptcha,
-        primaryEnabled = !current.busy && page != null,
+        primaryEnabled = !isSetupPage && !current.busy && page != null,
         secondary = "Позже",
     ) {
         Text(
-            if (current.remote) {
-                "Страница открыта с адреса ноды. Пройдите проверку, затем нажмите «Готово»: " +
+            when {
+                isSetupPage -> "Заполните страницу настройки ниже и нажмите её собственную кнопку: OpenFlux передаст данные транспорту сам."
+                current.remote -> "Страница открыта с адреса ноды. Пройдите проверку, затем нажмите «Готово»: " +
                     "cookies уйдут ноде, и канал через Яндекс поднимется."
-            } else {
-                "Пройдите проверку, затем нажмите «Готово». Если страница откроется без проверки, OpenFlux передаст cookies сам."
+                else -> "Пройдите проверку, затем нажмите «Готово». Если страница откроется без проверки, OpenFlux передаст cookies сам."
             },
             style = AppTheme.typography.body,
             color = AppTheme.colors.text,
@@ -76,6 +88,10 @@ fun CaptchaDialog() {
             else Text(current.progress.ifEmpty { "Открываю страницу проверки…" }, style = AppTheme.typography.body, color = AppTheme.colors.textSecondary)
         }
         Spacer(Modifier.height(AppTheme.spacing.s))
-        TextAction("Открыть страницу проверки заново", connection::openCaptcha, enabled = !current.busy)
+        TextAction(
+            if (isSetupPage) "Открыть страницу настройки заново" else "Открыть страницу проверки заново",
+            connection::openCaptcha,
+            enabled = !current.busy,
+        )
     }
 }

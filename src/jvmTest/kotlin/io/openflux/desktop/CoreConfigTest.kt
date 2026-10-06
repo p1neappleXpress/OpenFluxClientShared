@@ -4,6 +4,7 @@ import io.openflux.desktop.model.AppSettings
 import io.openflux.desktop.model.ConnectionMode
 import io.openflux.desktop.model.CoreConfig
 import io.openflux.desktop.model.CorePaths
+import io.openflux.desktop.model.ExitBackend
 import io.openflux.desktop.model.ExtraTransport
 import io.openflux.desktop.model.Profile
 import io.openflux.desktop.model.TransportType
@@ -142,6 +143,28 @@ class CoreConfigTest {
         assertNull(launch.socksAddress)
         assertNull(launch.httpProxyAddress)
         assertFalse(launch.usesIpc)
+    }
+
+    @Test
+    fun exitBackendIsWhatTheUserChoseOnClassicAndSessionProfiles() {
+        val classic = Profile(id = "c", name = "Old", transport = TransportType.YANDEX, value = "https://disk.yandex.ru/i/x", secret = secret)
+        fun mode(profile: Profile, backend: ExitBackend) =
+            CoreConfig.build(profile, AppSettings(mode = ConnectionMode.Exit, exitBackend = backend), paths)
+        assertTrue("--mode=l3" in mode(classic, ExitBackend.L3).arguments)
+        assertTrue("--mode=l4" in mode(classic, ExitBackend.L4).arguments)
+        assertTrue("Mode = l3" in mode(session, ExitBackend.L3).conf!!)
+        assertTrue("Mode = l4" in mode(session, ExitBackend.L4).conf!!)
+        // L4 stays what a profile gets when nothing was chosen.
+        assertEquals(ExitBackend.L4, AppSettings().exitBackend)
+    }
+
+    @Test
+    fun aClientIgnoresTheExitBackend() {
+        val client = CoreConfig.build(session, AppSettings(mode = ConnectionMode.Client, exitBackend = ExitBackend.L3), paths)
+        assertFalse("Mode =" in client.conf!!)
+        val classic = Profile(id = "c", name = "Old", transport = TransportType.YANDEX, value = "https://disk.yandex.ru/i/x", secret = secret)
+        val args = CoreConfig.build(classic, AppSettings(mode = ConnectionMode.Client, exitBackend = ExitBackend.L3), paths).arguments
+        assertFalse(args.any { it.startsWith("--mode") })
     }
 
     @Test

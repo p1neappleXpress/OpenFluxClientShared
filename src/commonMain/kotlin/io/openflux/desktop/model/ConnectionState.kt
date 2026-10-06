@@ -62,16 +62,28 @@ sealed interface ExitAddress {
     data class Unavailable(val reason: String) : ExitAddress
 }
 
-/** A Yandex check the core asks the user to pass in a browser. */
+/**
+ * A check or setup step the core asks the user to pass in a browser: a real
+ * site's check ([own] false, [url] is https), or a script transport's own
+ * setup page ([own] true): its inline [html] (then [url] is ""), or a [url]
+ * on the script's own loopback server. An own page hands its data back
+ * itself (window.openfluxSubmit); nothing is collected from it.
+ */
 data class CaptchaPrompt(
     val url: String,
     val reason: String,
     /** The check belongs to the exit node: the browser goes through its address. */
     val remote: Boolean,
+    /** A script transport's own setup/login page, inlined instead of a URL. */
+    val html: String? = null,
     val error: String = "",
     val busy: Boolean = false,
     /** The built-in browser getting ready (first-run download). */
     val progress: String = "",
+    /** The page is the script's own (inline [html] or its own server), not a site's check. */
+    val own: Boolean = html != null,
+    /** The transport that asked, for the dialog's title. */
+    val transport: String = "",
 )
 
 enum class LogLevel { Info, Success, Warning, Error, Debug }

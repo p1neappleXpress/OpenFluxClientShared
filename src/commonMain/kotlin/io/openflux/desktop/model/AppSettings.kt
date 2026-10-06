@@ -5,11 +5,33 @@ import kotlinx.serialization.Serializable
 @Serializable
 enum class ThemeMode(val label: String) { System("Как в системе"), Light("Светлая"), Dark("Тёмная") }
 
+/** Which releases "check for updates" looks at: the main ones, or also the nightly test builds. */
+@Serializable
+enum class UpdateChannel(val label: String) { Stable("Основной"), Nightly("Ночной") }
+
 /** How this computer takes part: a client of an exit, or an exit itself. */
 @Serializable
 enum class ConnectionMode(val label: String, val description: String) {
     Client("Клиент (SOCKS5)", "Трафик программ идёт через ноду"),
     Exit("Выходная нода", "Этот компьютер выпускает в интернет других"),
+}
+
+/**
+ * How an exit node forwards what its clients send (the core's --mode). L4 ends
+ * their connections here and opens new ones: it runs everywhere and needs no
+ * rights. L3 passes their packets on as they are: faster (one connection end to
+ * end), but it needs administrator or root rights and, on Windows, WinDivert.
+ */
+@Serializable
+enum class ExitBackend(val cliName: String, val label: String) {
+    L4("l4", "L4 · потоки"),
+    L3("l3", "L3 · пакеты"),
+}
+
+/** What to tell the user about an exit backend; [needs] is what this computer asks of them for L3, null for nothing. */
+fun ExitBackend.describe(needs: String?): String = when (this) {
+    ExitBackend.L4 -> "Принимает соединения клиентов и открывает свои: работает везде, права не нужны."
+    ExitBackend.L3 -> "Пересылает пакеты как есть: быстрее, чем L4, но нужны права" + (needs?.let { ": $it" } ?: "") + "."
 }
 
 /** Which core binary runs the connection. */
@@ -59,10 +81,24 @@ data class AppSettings(
     /** Hide document URLs and keys in the log view. */
     val maskSensitive: Boolean = true,
     val closeToTray: Boolean = true,
+    /** Release channel the update check follows (also the channel of script transports' own updates). */
+    val updateChannel: UpdateChannel = UpdateChannel.Stable,
+    /** Install an update of a first-party script transport without asking (same wire, same key). Others always ask. */
+    val autoUpdateScripts: Boolean = true,
+    /** When the script transports were last checked for updates (ms since epoch); 0 = never. */
+    val scriptsCheckedAt: Long = 0,
     /** Exit mode: address clients dial for direct ("" = the core's guess). */
     val exitShareHost: String = "",
     /** Exit mode: TCP port for the direct transport. */
     val exitDirectPort: Int = 8445,
+    /** Exit mode: how the node forwards its clients' traffic. */
+    val exitBackend: ExitBackend = ExitBackend.L4,
+    /**
+     * "Экспериментальные функции": what is still being proved stays off until the user turns it on. Today that
+     * is every JS-engine feature: the «Транспорты» tab, installing, updating and configuring script transports,
+     * and connecting through one. Off, none of it is shown, started or fetched.
+     */
+    val experimental: Boolean = false,
     /** Set while OpenFlux has changed the Windows proxy; restored on exit or next start. */
     val savedSystemProxy: SavedSystemProxy? = null,
     val sidebarCollapsed: Boolean = false,

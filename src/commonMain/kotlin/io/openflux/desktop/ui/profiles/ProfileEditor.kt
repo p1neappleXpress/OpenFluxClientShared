@@ -46,13 +46,16 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.collectAsState
 import io.openflux.desktop.model.Codec
 import io.openflux.desktop.model.ExtraTransport
+import io.openflux.desktop.model.InstalledScript
 import io.openflux.desktop.model.NodeTransports
 import io.openflux.desktop.model.PhpHosts
 import io.openflux.desktop.model.Profile
 import io.openflux.desktop.model.TransportType
 import io.openflux.desktop.model.ValueKind
+import io.openflux.desktop.service.LocalAppContainer
 import io.openflux.desktop.ui.LocalScrollbars
 import io.openflux.desktop.ui.LocalShortcuts
 import io.openflux.desktop.ui.LocalTouchUi
@@ -60,12 +63,10 @@ import io.openflux.desktop.ui.components.AppButton
 import io.openflux.desktop.ui.components.AppCard
 import io.openflux.desktop.ui.components.AppIconButton
 import io.openflux.desktop.ui.components.AppIcons
-import io.openflux.desktop.ui.components.AppMenu
 import io.openflux.desktop.ui.components.AppTextField
 import io.openflux.desktop.ui.components.Banner
 import io.openflux.desktop.ui.components.ButtonStyle
 import io.openflux.desktop.ui.components.LocalToaster
-import io.openflux.desktop.ui.components.MenuAction
 import io.openflux.desktop.ui.components.SectionLabel
 import io.openflux.desktop.ui.components.Segmented
 import io.openflux.desktop.ui.components.TextAction
@@ -73,6 +74,9 @@ import io.openflux.desktop.ui.components.Tone
 import io.openflux.desktop.ui.components.appClickable
 import io.openflux.desktop.ui.theme.AppTheme
 import org.jetbrains.compose.resources.painterResource
+
+/** A key shorter than this still works, but is within reach of guessing by whoever carries the traffic. */
+private const val WEAK_SECRET = 24
 
 /** How a profile connects: one carrier, several at once, or a PHP node on a web hosting. */
 private enum class EditMode(val label: String) { Classic("Обычный"), Session("Session"), Stream("Без сервера") }
@@ -180,11 +184,15 @@ fun ProfileEditor(model: ProfilesScreenModel, state: EditorState, onBack: (() ->
                     SectionLabel(if (draft.session) "Основной транспорт" else "Транспорт")
                     Spacer(Modifier.height(AppTheme.spacing.m))
                     CarrierFields(
-                        carrier = ExtraTransport(draft.transport, draft.value, draft.uid, draft.priority),
+                        carrier = ExtraTransport(draft.transport, draft.value, draft.uid, draft.priority, draft.scriptId, draft.settings),
                         session = draft.session,
                         showPriority = draft.session,
                         stream = draft.stream,
-                        onChange = { c -> model.updateDraft { it.copy(transport = c.type, value = c.value, uid = c.uid, priority = c.priority) } },
+                        onChange = { c ->
+                            model.updateDraft {
+                                it.copy(transport = c.type, value = c.value, uid = c.uid, priority = c.priority, scriptId = c.scriptId, settings = c.settings)
+                            }
+                        },
                     )
                     if (!draft.session && !draft.stream) {
                         Spacer(Modifier.height(AppTheme.spacing.l))
@@ -229,6 +237,16 @@ fun ProfileEditor(model: ProfilesScreenModel, state: EditorState, onBack: (() ->
                         helper = "Тот же ключ, что у ноды. Не короче ${Profile.MIN_SECRET} символов.",
                     )
                     TextAction("Сгенерировать безопасный ключ", { model.updateDraft { it.copy(secret = model.newSecret()) } })
+                    when {
+                        draft.secret.isBlank() && !draft.session -> Banner(
+                            "Без ключа трафик идёт через сервис без шифрования: его видит владелец площадки (Яндекс, Mail.ru и т. п.). Задайте ключ, как на ноде.",
+                            Tone.Warning,
+                        )
+                        draft.secret.isNotBlank() && draft.secret.length < WEAK_SECRET -> Banner(
+                            "Короткий ключ можно подобрать: площадка видит весь зашифрованный трафик и может перебирать варианты. Надёжнее сгенерированный.",
+                            Tone.Neutral,
+                        )
+                    }
                 }
 
                 if (draft.session) {
@@ -249,23 +267,40 @@ fun ProfileEditor(model: ProfilesScreenModel, state: EditorState, onBack: (() ->
 
 @Composable
 private fun CarrierFields(carrier: ExtraTransport, session: Boolean, showPriority: Boolean, stream: Boolean = false, onChange: (ExtraTransport) -> Unit) {
+    val experimental = LocalAppContainer.current.settings.settings.collectAsState().value.experimental
+    val installedScripts = LocalAppContainer.current.scripts.scripts.collectAsState().value.filter { it.enabled && experimental }
+    val script = if (carrier.type == TransportType.SCRIPT) installedScripts.firstOrNull { it.id == carrier.scriptId } else null
+    val scriptParam = script?.primaryParam
     Column(verticalArrangement = Arrangement.spacedBy(AppTheme.spacing.m)) {
-        TransportDropdown(carrier.type, session, stream) { onChange(carrier.copy(type = it)) }
+        TransportDropdown(carrier.type, carrier.scriptId, installedScripts, session, stream, experimental) { type, sid ->
+            onChange(carrier.copy(type = type, scriptId = sid))
+        }
+        if (carrier.type == TransportType.SCRIPT && !experimental) {
+            Text(
+                "Этот профиль использует JS-транспорт, а экспериментальные функции выключены: он не подключится. " +
+                    "Включите их в настройках или выберите встроенный транспорт.",
+                style = AppTheme.typography.bodySmall,
+                color = AppTheme.colors.warning,
+            )
+        }
+        // A script that has no profile input (all its params are settings) shows no value field.
+        val noValueField = carrier.type == TransportType.SCRIPT && script != null && scriptParam == null
         Row(horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.m)) {
-            AppTextField(
+            if (!noValueField) AppTextField(
                 value = carrier.value,
                 onValueChange = { onChange(carrier.copy(value = it.trim())) },
-                label = when (carrier.type.kind) {
-                    ValueKind.DocumentUrl -> when {
+                label = when {
+                    carrier.type == TransportType.SCRIPT -> scriptParam?.label?.ifBlank { null } ?: "Параметр"
+                    carrier.type.kind == ValueKind.DocumentUrl -> when {
                         stream && carrier.type == TransportType.CUPSONLINE -> "Адрес комнаты cups.online"
                         carrier.type == TransportType.CUPSONLINE -> "Код комнат"
                         else -> "Ссылка на документ"
                     }
-                    ValueKind.Address -> "Адрес ноды"
-                    ValueKind.Token -> "Токен MAX Web"
+                    carrier.type.kind == ValueKind.Address -> "Адрес ноды"
+                    else -> "Токен MAX Web"
                 },
-                placeholder = carrier.type.valueHint,
-                secret = carrier.type.kind == ValueKind.Token,
+                placeholder = if (carrier.type == TransportType.SCRIPT) (scriptParam?.type ?: "") else carrier.type.valueHint,
+                secret = carrier.type.kind == ValueKind.Token || scriptParam?.type == "secret",
                 error = if (carrier.value.isNotBlank()) {
                     when {
                         stream && carrier.type == TransportType.CUPSONLINE ->
@@ -287,6 +322,37 @@ private fun CarrierFields(carrier: ExtraTransport, session: Boolean, showPriorit
                 )
             }
         }
+        if (script != null && script.hasSettings) {
+            val container = LocalAppContainer.current
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.m)) {
+                val total = script.settingParams.size
+                if (total > 0 || script.settingsPage) {
+                    val filled = script.settingParams.count { carrier.settings[it.key].orEmpty().isNotBlank() }
+                    Text(
+                        if (script.settingsPage) "У скрипта своя страница настроек" else "Настройки скрипта: $filled из $total",
+                        style = AppTheme.typography.caption,
+                        color = AppTheme.colors.textSecondary,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+                TextAction(
+                    "Открыть настройки",
+                    {
+                        // Prefilled with the carrier's own value too, under the profile
+                        // param's key: the wizard edits the same value the field above
+                        // does. Save splits the result back the same way.
+                        val current = carrier.settings + (scriptParam?.key?.let { mapOf(it to carrier.value) } ?: emptyMap())
+                        container.scriptSettings.open(script.id, current) { saved ->
+                            val newValue = scriptParam?.key?.let { saved[it] } ?: carrier.value
+                            val newSettings = scriptParam?.key?.let { saved - it } ?: saved
+                            onChange(carrier.copy(value = newValue, settings = newSettings))
+                        }
+                    },
+                )
+            }
+        }
         if (carrier.type == TransportType.ONEME) {
             AppTextField(carrier.uid, { onChange(carrier.copy(uid = it.trim())) }, label = "ID пользователя MAX", placeholder = "Число из адреса звонка")
         }
@@ -294,10 +360,29 @@ private fun CarrierFields(carrier: ExtraTransport, session: Boolean, showPriorit
 }
 
 @Composable
-private fun TransportDropdown(selected: TransportType, session: Boolean, stream: Boolean, onSelect: (TransportType) -> Unit) {
+private fun TransportDropdown(
+    selected: TransportType,
+    selectedScriptId: String,
+    scripts: List<InstalledScript>,
+    session: Boolean,
+    stream: Boolean,
+    experimental: Boolean,
+    onSelect: (TransportType, String) -> Unit,
+) {
     var open by remember { mutableStateOf(false) }
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val selectedScript = if (selected == TransportType.SCRIPT) scripts.firstOrNull { it.id == selectedScriptId } else null
+    val label = when {
+        selected != TransportType.SCRIPT -> selected.label
+        !experimental -> "JS-транспорт (выключен)"
+        else -> "JS · ${selectedScript?.name ?: "выберите скрипт"}"
+    }
+    // Native transports (scripts are their own section below); SCRIPT itself is
+    // never a generic entry - you pick a specific installed script.
+    val native = TransportType.entries.filter {
+        it != TransportType.SCRIPT && (if (stream) it in PhpHosts.carriers else session || !it.sessionOnly)
+    }
     Box {
         Row(
             Modifier
@@ -312,12 +397,22 @@ private fun TransportDropdown(selected: TransportType, session: Boolean, stream:
         ) {
             Icon(painterResource(AppIcons.byName(selected.icon)), null, tint = AppTheme.colors.accent, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(AppTheme.spacing.s))
-            Text(selected.label, style = AppTheme.typography.body, color = AppTheme.colors.text, modifier = Modifier.weight(1f))
+            Text(label, style = AppTheme.typography.body, color = AppTheme.colors.text, modifier = Modifier.weight(1f))
             Icon(Icons.Rounded.ExpandMore, "Выбрать транспорт", tint = AppTheme.colors.textSecondary)
         }
-        AppMenu(open, { open = false }, TransportType.entries.filter { if (stream) it in PhpHosts.carriers else session || !it.sessionOnly }.map { type ->
-            MenuAction(type.label, { onSelect(type) })
-        })
+        if (open) {
+            TransportPickerDialog(
+                selected = selected,
+                selectedScriptId = selectedScriptId,
+                native = native,
+                // Script transports stand on equal footing with native ones (shown only
+                // outside stream mode, which is the PHP-node carriers).
+                scripts = if (stream) emptyList() else scripts,
+                showScripts = experimental && !stream,
+                onSelect = { type, sid -> open = false; onSelect(type, sid) },
+                onDismiss = { open = false },
+            )
+        }
     }
 }
 

@@ -10,6 +10,8 @@ import com.google.zxing.RGBLuminanceSource
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import io.openflux.desktop.core.CoreBinary
+import io.openflux.desktop.core.ExitL3
 import io.openflux.desktop.service.PlatformServices
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -30,12 +32,15 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.time.Duration
+import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
 
 class JvmPlatformServices(
     override val appVersion: String,
+    private val binary: CoreBinary,
     private val coreVersionProvider: () -> String,
 ) : PlatformServices {
     private val os = System.getProperty("os.name").lowercase()
@@ -49,6 +54,15 @@ class JvmPlatformServices(
     override val fullTunnelPrompt: String? get() = when {
         MacElevation.mac && !MacElevation.root -> "при подключении macOS спросит пароль администратора"
         WindowsCoreElevation.windows && !WindowsElevation.elevated -> "при подключении Windows попросит разрешение администратора"
+        else -> null
+    }
+
+    override val exitL3Supported: Boolean = os.contains("win") || os.contains("linux")
+    override val exitL3Needs: String? get() = when {
+        WindowsCoreElevation.windows && !WindowsElevation.elevated ->
+            "при запуске Windows попросит разрешение администратора, а драйвер WinDivert (0,4 МБ) скачается сам, если его нет"
+        WindowsCoreElevation.windows -> "драйвер WinDivert (0,4 МБ) скачается сам, если его нет"
+        os.contains("linux") && !ExitL3.isRoot() -> "запустите OpenFlux от root"
         else -> null
     }
 
@@ -115,19 +129,28 @@ class JvmPlatformServices(
     override fun now(): Long = System.currentTimeMillis()
 
     override suspend fun latestRelease(): String? = withContext(Dispatchers.IO) {
-        runCatching {
-            // GitHub answers a renamed repository with a redirect.
-            val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8))
-                .followRedirects(HttpClient.Redirect.NORMAL).build()
-            val request = HttpRequest.newBuilder(URI("https://api.github.com/repos/$RELEASE_REPO/releases?per_page=20"))
-                .header("User-Agent", "OpenFlux-Desktop").timeout(Duration.ofSeconds(10)).build()
-            val body = http.send(request, HttpResponse.BodyHandlers.ofString()).body()
-            Json.parseToJsonElement(body).jsonArray
-                .map { it.jsonObject["tag_name"]?.jsonPrimitive?.content.orEmpty() }
-                .firstOrNull { it.startsWith(DESKTOP_TAG_PREFIX) }
-                ?.removePrefix(DESKTOP_TAG_PREFIX)
-        }.getOrNull()
+        releaseTags().firstOrNull { it.startsWith(DESKTOP_TAG_PREFIX) }?.removePrefix(DESKTOP_TAG_PREFIX)
     }
+
+    /** The newest release of either channel; GitHub lists them newest first. */
+    override suspend fun latestNightly(): String? = withContext(Dispatchers.IO) {
+        releaseTags().firstOrNull { it.startsWith(DESKTOP_TAG_PREFIX) || it.startsWith(NIGHTLY_TAG_PREFIX) }
+            ?.removePrefix(DESKTOP_TAG_PREFIX)
+    }
+
+    /** Tags of the published (non-draft) releases, newest first; empty when offline. */
+    private fun releaseTags(): List<String> = runCatching {
+        // GitHub answers a renamed repository with a redirect.
+        val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8))
+            .followRedirects(HttpClient.Redirect.NORMAL).build()
+        val request = HttpRequest.newBuilder(URI("https://api.github.com/repos/$RELEASE_REPO/releases?per_page=30"))
+            .header("User-Agent", "OpenFlux-Desktop").timeout(Duration.ofSeconds(10)).build()
+        val body = http.send(request, HttpResponse.BodyHandlers.ofString()).body()
+        Json.parseToJsonElement(body).jsonArray
+            .map { it.jsonObject }
+            .filter { it["draft"]?.jsonPrimitive?.content != "true" }
+            .map { it["tag_name"]?.jsonPrimitive?.content.orEmpty() }
+    }.getOrDefault(emptyList())
 
     private fun decodeQr(image: BufferedImage): String? {
         val pixels = IntArray(image.width * image.height)
@@ -150,10 +173,151 @@ class JvmPlatformServices(
         return buffered
     }
 
+    // --- JS script transports ---
+    //
+    // Unlike the mobile apps (gomobile, in-process), desktop has only the
+    // compiled core binary: inspectTransport shells out to its
+    // --inspect-script subcommand (transport/script.InspectTrust under
+    // the hood - the one place that logic lives, see core/script_cli.go).
+    // scriptFingerprint needs no process at all: SHA-256 of a public key
+    // is safe to compute here directly, same hash every platform shows
+    // the user to compare out of band.
+
+    override val officialScriptKey: String get() = OFFICIAL_SCRIPT_KEY
+
+    override fun inspectTransport(data: ByteArray, sig: ByteArray, pubkeyHex: String): String {
+        val core = binary.bundled()
+            ?: return """{"ok":false,"signature":"unverified","error":"ядро не найдено"}"""
+        return runInspectScript(core, data, sig, pubkeyHex)
+    }
+
+    // The settings wizard of an installed transport: `--script-settings` (transport/script.BuildSettings).
+    override fun scriptSettings(data: ByteArray, sig: ByteArray, pubkeyHex: String, valuesJson: String, lang: String): String {
+        val core = binary.bundled()
+            ?: return """{"ok":false,"code":"failed","error":"ядро не найдено"}"""
+        return runScriptSettings(core, data, sig, pubkeyHex, valuesJson, lang)
+    }
+
+    // Script-transport updates: the core's own subcommands (transport/script/update.go),
+    // the same logic the mobile apps call in-process. The installed transport is the
+    // JSON the updater builds; it is turned into flags here.
+    override fun checkScriptUpdate(installedJson: String, channel: String): String =
+        runUpdateCore("--check-script-update", installedJson, channel, null, false)
+
+    override fun applyScriptUpdate(installedJson: String, channel: String, dir: String, allowWireBreak: Boolean): String =
+        runUpdateCore("--apply-script-update", installedJson, channel, dir, allowWireBreak)
+
+    override fun rollbackScript(installedJson: String, dir: String): String =
+        runUpdateCore("--rollback-script", installedJson, "stable", dir, false)
+
+    private fun runUpdateCore(op: String, installedJson: String, channel: String, dir: String?, allowWireBreak: Boolean): String {
+        val core = binary.bundled() ?: return """{"status":"error","code":"unsupported"}"""
+        return try {
+            val o = kotlinx.serialization.json.Json.parseToJsonElement(installedJson) as kotlinx.serialization.json.JsonObject
+            fun str(k: String) = (o[k] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+            val urls = (o["update"] as? kotlinx.serialization.json.JsonArray)?.joinToString(",") { (it as kotlinx.serialization.json.JsonPrimitive).content }.orEmpty()
+            val args = buildList {
+                add(core.absolutePath); add(op)
+                add("--id=${str("id")}"); add("--file=${str("file")}"); add("--version=${str("version")}")
+                add("--wire=${str("wire").ifBlank { "0" }}"); add("--pubkey=${str("pubkey")}")
+                add("--update=$urls"); add("--channel=$channel")
+                if (dir != null) add("--dir=$dir")
+                if (allowWireBreak) add("--allow-wire-break")
+            }
+            val process = ProcessBuilder(args).redirectErrorStream(false).start()
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor(3, TimeUnit.MINUTES)
+            output.trim().ifBlank { """{"status":"error","code":"fetch_failed"}""" }
+        } catch (e: Exception) {
+            """{"status":"error","code":"fetch_failed"}"""
+        }
+    }
+
+    override fun scriptFingerprint(pubkeyHex: String): String = runCatching {
+        val key = pubkeyHex.trim().replace(" ", "")
+        val bytes = ByteArray(key.length / 2) { i -> ((hexDigit(key[i * 2]) shl 4) or hexDigit(key[i * 2 + 1])).toByte() }
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+    }.getOrDefault("")
+
+    private fun hexDigit(c: Char): Int = Character.digit(c, 16).also { require(it >= 0) { "bad hex digit $c" } }
+
+    override suspend fun fetchBytes(url: String): ByteArray? = withContext(Dispatchers.IO) {
+        runCatching {
+            val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8)).followRedirects(HttpClient.Redirect.NORMAL).build()
+            val request = HttpRequest.newBuilder(URI(url)).header("User-Agent", "OpenFlux-Desktop").timeout(Duration.ofSeconds(20)).build()
+            val response = http.send(request, HttpResponse.BodyHandlers.ofInputStream())
+            // A transport package is a few KB; an answer past the cap is not one.
+            if (response.statusCode() !in 200..299) return@runCatching null
+            response.body().use { body -> body.readNBytes(MAX_FETCH_BYTES + 1).takeIf { it.size <= MAX_FETCH_BYTES } }
+        }.getOrNull()
+    }
+
+    override suspend fun readBytes(pathOrUri: String): ByteArray? = withContext(Dispatchers.IO) {
+        runCatching { File(pathOrUri).readBytes() }.getOrNull()
+    }
+
+    /** Runs `<core> --script-settings --data=<f> [--sig=<f>] --pubkey=<hex> --values=<json> --lang=<l>`, returning its JSON stdout as-is. */
+    private fun runScriptSettings(core: File, data: ByteArray, sig: ByteArray, pubkeyHex: String, valuesJson: String, lang: String): String {
+        val dataFile = File.createTempFile("ofx-script-", ".bin")
+        val sigFile = if (sig.isNotEmpty()) File.createTempFile("ofx-script-", ".sig") else null
+        return try {
+            dataFile.writeBytes(data)
+            sigFile?.writeBytes(sig)
+            val args = buildList {
+                add(core.absolutePath); add("--script-settings"); add("--data=${dataFile.absolutePath}")
+                sigFile?.let { add("--sig=${it.absolutePath}") }
+                add("--pubkey=${pubkeyHex.trim()}")
+                if (valuesJson.isNotBlank()) add("--values=$valuesJson")
+                add("--lang=$lang")
+            }
+            val process = ProcessBuilder(args).redirectErrorStream(false).start()
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor(15, TimeUnit.SECONDS)
+            output.trim().ifBlank { """{"ok":false,"code":"failed","error":"ядро не ответило"}""" }
+        } catch (e: Exception) {
+            val msg = (e.message ?: "неизвестная ошибка").replace("\\", "\\\\").replace("\"", "\\\"")
+            """{"ok":false,"code":"failed","error":"$msg"}"""
+        } finally {
+            dataFile.delete()
+            sigFile?.delete()
+        }
+    }
+
+    /** Runs `<core> --inspect-script --data=<f> [--sig=<f>] [--pubkey=<hex>]`, returning its JSON stdout as-is. */
+    private fun runInspectScript(core: File, data: ByteArray, sig: ByteArray, pubkeyHex: String): String {
+        val dataFile = File.createTempFile("ofx-script-", ".bin")
+        val sigFile = if (sig.isNotEmpty()) File.createTempFile("ofx-script-", ".sig") else null
+        return try {
+            dataFile.writeBytes(data)
+            sigFile?.writeBytes(sig)
+            val args = buildList {
+                add(core.absolutePath); add("--inspect-script"); add("--data=${dataFile.absolutePath}")
+                sigFile?.let { add("--sig=${it.absolutePath}") }
+                if (pubkeyHex.isNotBlank()) add("--pubkey=${pubkeyHex.trim()}")
+            }
+            val process = ProcessBuilder(args).redirectErrorStream(false).start()
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor(10, TimeUnit.SECONDS)
+            output.trim().ifBlank { """{"ok":false,"signature":"unverified","error":"ядро не ответило"}""" }
+        } catch (e: Exception) {
+            val msg = (e.message ?: "неизвестная ошибка").replace("\\", "\\\\").replace("\"", "\\\"")
+            """{"ok":false,"signature":"unverified","error":"$msg"}"""
+        } finally {
+            dataFile.delete()
+            sigFile?.delete()
+        }
+    }
+
     companion object {
         /** Where the desktop releases are published, tagged v1.2.3. */
         const val RELEASE_REPO = "p1neappleXpress/OpenFluxDesktop"
         const val DESKTOP_TAG_PREFIX = "v"
+        /** Nightly test builds are tagged nightly-<date>-<commit>, as prereleases. */
+        const val NIGHTLY_TAG_PREFIX = "nightly-"
+        /** The OpenFlux project's own script-signing key - see transport/script.OfficialKeyHex. Public; safe to duplicate. */
+        /** Largest answer [fetchBytes] returns; a downloaded transport is a few KB. */
+        const val MAX_FETCH_BYTES = 4 * 1024 * 1024
+        const val OFFICIAL_SCRIPT_KEY = "d8bf9c958b994c2faab886cade5f28213f254911f87abe5e34756a289ae91354"
     }
 }
 
