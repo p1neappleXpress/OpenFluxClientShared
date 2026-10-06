@@ -10,6 +10,7 @@ import com.google.zxing.RGBLuminanceSource
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import io.openflux.desktop.core.ExitL3
 import io.openflux.desktop.service.PlatformServices
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -49,6 +50,13 @@ class JvmPlatformServices(
     override val fullTunnelPrompt: String? get() = when {
         MacElevation.mac && !MacElevation.root -> "при подключении macOS спросит пароль администратора"
         WindowsCoreElevation.windows && !WindowsElevation.elevated -> "при подключении Windows попросит разрешение администратора"
+        else -> null
+    }
+
+    override val exitL3Supported: Boolean = os.contains("win") || os.contains("linux")
+    override val exitL3Needs: String? get() = when {
+        WindowsCoreElevation.windows && !WindowsElevation.elevated -> "при запуске Windows попросит разрешение администратора"
+        os.contains("linux") && !ExitL3.isRoot() -> "запустите OpenFlux от root"
         else -> null
     }
 

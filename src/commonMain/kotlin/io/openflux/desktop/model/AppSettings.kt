@@ -12,6 +12,24 @@ enum class ConnectionMode(val label: String, val description: String) {
     Exit("Выходная нода", "Этот компьютер выпускает в интернет других"),
 }
 
+/**
+ * How an exit node forwards what its clients send (the core's --mode). L4 ends
+ * their connections here and opens new ones: it runs everywhere and needs no
+ * rights. L3 passes their packets on as they are: faster (one connection end to
+ * end), but it needs administrator or root rights and, on Windows, WinDivert.
+ */
+@Serializable
+enum class ExitBackend(val cliName: String, val label: String) {
+    L4("l4", "L4 · потоки"),
+    L3("l3", "L3 · пакеты"),
+}
+
+/** What to tell the user about an exit backend; [needs] is what this computer asks of them for L3, null for nothing. */
+fun ExitBackend.describe(needs: String?): String = when (this) {
+    ExitBackend.L4 -> "Принимает соединения клиентов и открывает свои: работает везде, права не нужны."
+    ExitBackend.L3 -> "Пересылает пакеты как есть: быстрее, чем L4, но нужны права" + (needs?.let { ": $it" } ?: "") + "."
+}
+
 /** Which core binary runs the connection. */
 @Serializable
 enum class CoreSource(val label: String) { Bundled("Встроенное ядро"), Custom("Свой файл") }
@@ -63,6 +81,8 @@ data class AppSettings(
     val exitShareHost: String = "",
     /** Exit mode: TCP port for the direct transport. */
     val exitDirectPort: Int = 8445,
+    /** Exit mode: how the node forwards its clients' traffic. */
+    val exitBackend: ExitBackend = ExitBackend.L4,
     /** Set while OpenFlux has changed the Windows proxy; restored on exit or next start. */
     val savedSystemProxy: SavedSystemProxy? = null,
     val sidebarCollapsed: Boolean = false,

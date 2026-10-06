@@ -45,7 +45,7 @@ object CoreConfig {
             appendLine("[Interface]")
             if (exit) {
                 appendLine("Role = exit")
-                appendLine("Mode = l4")
+                appendLine("Mode = ${settings.exitBackend.cliName}")
             } else if (settings.fullTunnel) {
                 appendLine("Role = client")
                 appendLine("Inbound = tun")
@@ -132,10 +132,10 @@ object CoreConfig {
     private fun classic(profile: Profile, settings: AppSettings, paths: CorePaths, exit: Boolean, socks: String, http: String): CoreLaunch {
         val args = buildList {
             if (exit) {
-                // The same l4 exit a Session profile runs, serving classic
+                // The same exit a Session profile runs, serving classic
                 // clients of this transport.
                 add("--role=exit")
-                add("--mode=l4")
+                add("--mode=${settings.exitBackend.cliName}")
             } else if (settings.fullTunnel) {
                 add("--role=client")
                 add("--inbound=tun")
