@@ -116,7 +116,7 @@ class ScriptSettingsTest {
             secret = "0123456789abcdef0123456789abcdef", scriptId = "demo", settings = settings,
         )
         val paths = CorePaths(keyFile = "/k", confFile = "/c", cookieStore = "/s", ipcSocket = null)
-        fun conf(p: Profile, lookup: ScriptCarrierLookup) = CoreConfig.build(p, AppSettings(), paths) { lookup }.conf.orEmpty()
+        fun conf(p: Profile, lookup: ScriptCarrierLookup) = CoreConfig.build(p, AppSettings(experimental = true), paths) { lookup }.conf.orEmpty()
         val with = conf(profile, ScriptCarrierLookup("/p.flux", "aa", "demo"))
         assertTrue("Params = $line" in with, with)
         assertTrue("Path = /p.flux" in with && "Name = demo" in with)

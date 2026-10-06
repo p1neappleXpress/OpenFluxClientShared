@@ -81,6 +81,7 @@ enum class SettingsCategory(val title: String, val subtitle: String, val icon: D
     SystemProxy("Системный прокси", "Весь трафик компьютера через OpenFlux", AppIcons.Routing),
     Core("Ядро OpenFlux", "Файл ядра и подробный журнал", AppIcons.Code),
     Interface("Интерфейс", "Тема, трей, журнал", AppIcons.DarkMode),
+    Experimental("Экспериментальные функции", "То, что ещё проверяется: JS-транспорты", AppIcons.Code),
     About("О программе", "Версии и репозитории", AppIcons.Info);
 
     /** Title and subtitle in the device's words. */
@@ -158,6 +159,7 @@ private fun SettingsScreen(model: SettingsScreenModel) {
                             SettingsCategory.SystemProxy -> SystemProxySettings(model)
                             SettingsCategory.Core -> CoreSettings(model)
                             SettingsCategory.Interface -> InterfaceSettings(model)
+                            SettingsCategory.Experimental -> ExperimentalSettings(model)
                             SettingsCategory.About -> AboutSettings(model)
                         }
                     }
@@ -490,6 +492,42 @@ private fun InterfaceSettings(model: SettingsScreenModel) {
             { v -> model.update { it.copy(maskSensitive = v) } },
         )
     }
+}
+
+@Composable
+private fun ExperimentalSettings(model: SettingsScreenModel) {
+    val settings by model.container.settings.settings.collectAsState()
+    AppCard(padding = AppTheme.spacing.s) {
+        SwitchRow(
+            "Экспериментальные функции",
+            "Включает то, что ещё проверяется и по умолчанию скрыто. Выключено — ничего из этого не показывается, не запускается и не скачивается",
+            settings.experimental,
+            { v -> model.update { it.copy(experimental = v) } },
+        )
+    }
+    AppCard {
+        SectionLabel("Что это включает")
+        Spacer(Modifier.height(AppTheme.spacing.s))
+        Text(
+            "JS-транспорты: вкладка «Транспорты» — установка скриптов по ссылке, из файла или из каталога, " +
+                "их настройки и страницы входа, проверка и установка обновлений; профили, которые подключаются через такой транспорт.",
+            style = AppTheme.typography.bodySmall,
+            color = AppTheme.colors.textSecondary,
+        )
+        Spacer(Modifier.height(AppTheme.spacing.s))
+        Text(
+            if (settings.experimental) "Включено. Профили с JS-транспортом подключаются, вкладка «Транспорты» на месте."
+            else "Выключено. Профили с JS-транспортом не подключатся, пока вы это не включите; встроенные транспорты работают как обычно.",
+            style = AppTheme.typography.bodySmall,
+            color = AppTheme.colors.textHint,
+        )
+    }
+    Text(
+        "Экспериментальные функции могут работать нестабильно и меняться от версии к версии. Скрипт-транспорт запускает чужой код " +
+            "(в песочнице ядра, под подписью автора): ставьте только те, которым доверяете.",
+        style = AppTheme.typography.bodySmall,
+        color = AppTheme.colors.textSecondary,
+    )
 }
 
 @Composable

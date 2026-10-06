@@ -267,12 +267,21 @@ fun ProfileEditor(model: ProfilesScreenModel, state: EditorState, onBack: (() ->
 
 @Composable
 private fun CarrierFields(carrier: ExtraTransport, session: Boolean, showPriority: Boolean, stream: Boolean = false, onChange: (ExtraTransport) -> Unit) {
-    val installedScripts = LocalAppContainer.current.scripts.scripts.collectAsState().value.filter { it.enabled }
+    val experimental = LocalAppContainer.current.settings.settings.collectAsState().value.experimental
+    val installedScripts = LocalAppContainer.current.scripts.scripts.collectAsState().value.filter { it.enabled && experimental }
     val script = if (carrier.type == TransportType.SCRIPT) installedScripts.firstOrNull { it.id == carrier.scriptId } else null
     val scriptParam = script?.primaryParam
     Column(verticalArrangement = Arrangement.spacedBy(AppTheme.spacing.m)) {
-        TransportDropdown(carrier.type, carrier.scriptId, installedScripts, session, stream) { type, sid ->
+        TransportDropdown(carrier.type, carrier.scriptId, installedScripts, session, stream, experimental) { type, sid ->
             onChange(carrier.copy(type = type, scriptId = sid))
+        }
+        if (carrier.type == TransportType.SCRIPT && !experimental) {
+            Text(
+                "Этот профиль использует JS-транспорт, а экспериментальные функции выключены: он не подключится. " +
+                    "Включите их в настройках или выберите встроенный транспорт.",
+                style = AppTheme.typography.bodySmall,
+                color = AppTheme.colors.warning,
+            )
         }
         // A script that has no profile input (all its params are settings) shows no value field.
         val noValueField = carrier.type == TransportType.SCRIPT && script != null && scriptParam == null
@@ -357,13 +366,18 @@ private fun TransportDropdown(
     scripts: List<InstalledScript>,
     session: Boolean,
     stream: Boolean,
+    experimental: Boolean,
     onSelect: (TransportType, String) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val selectedScript = if (selected == TransportType.SCRIPT) scripts.firstOrNull { it.id == selectedScriptId } else null
-    val label = if (selected == TransportType.SCRIPT) "JS · ${selectedScript?.name ?: "выберите скрипт"}" else selected.label
+    val label = when {
+        selected != TransportType.SCRIPT -> selected.label
+        !experimental -> "JS-транспорт (выключен)"
+        else -> "JS · ${selectedScript?.name ?: "выберите скрипт"}"
+    }
     // Native transports (scripts are their own section below); SCRIPT itself is
     // never a generic entry - you pick a specific installed script.
     val native = TransportType.entries.filter {
@@ -394,6 +408,7 @@ private fun TransportDropdown(
                 // Script transports stand on equal footing with native ones (shown only
                 // outside stream mode, which is the PHP-node carriers).
                 scripts = if (stream) emptyList() else scripts,
+                showScripts = experimental && !stream,
                 onSelect = { type, sid -> open = false; onSelect(type, sid) },
                 onDismiss = { open = false },
             )

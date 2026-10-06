@@ -93,6 +93,12 @@ data class AppSettings(
     val exitDirectPort: Int = 8445,
     /** Exit mode: how the node forwards its clients' traffic. */
     val exitBackend: ExitBackend = ExitBackend.L4,
+    /**
+     * "Экспериментальные функции": what is still being proved stays off until the user turns it on. Today that
+     * is every JS-engine feature: the «Транспорты» tab, installing, updating and configuring script transports,
+     * and connecting through one. Off, none of it is shown, started or fetched.
+     */
+    val experimental: Boolean = false,
     /** Set while OpenFlux has changed the Windows proxy; restored on exit or next start. */
     val savedSystemProxy: SavedSystemProxy? = null,
     val sidebarCollapsed: Boolean = false,

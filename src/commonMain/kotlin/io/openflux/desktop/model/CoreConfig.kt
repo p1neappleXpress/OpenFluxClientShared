@@ -41,6 +41,9 @@ data class CoreLaunch(
 object CoreConfig {
     const val LOOPBACK = "127.0.0.1"
 
+    /** Why a profile with a JS transport does not connect while the experimental features are off. */
+    const val SCRIPTS_OFF = "В профиле JS-транспорт, а экспериментальные функции выключены: включите их в настройках («Экспериментальные функции»)"
+
     /**
      * [scriptCarrier] resolves a SCRIPT carrier's installed script (by
      * [ExtraTransport.scriptId]/[SessionSpec.scriptId]) to its on-disk path
@@ -57,6 +60,7 @@ object CoreConfig {
     ): CoreLaunch {
         val problems = profile.problems()
         require(problems.isEmpty()) { problems.first() }
+        require(settings.experimental || profile.carriers.none { it.type == TransportType.SCRIPT }) { SCRIPTS_OFF }
         val exit = settings.mode == ConnectionMode.Exit
         val socks = "$LOOPBACK:${settings.socksPort}"
         val http = "$LOOPBACK:${settings.socksPort + 1}"

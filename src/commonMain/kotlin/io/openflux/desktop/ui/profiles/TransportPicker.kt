@@ -66,13 +66,15 @@ internal fun TransportPickerDialog(
     selectedScriptId: String,
     native: List<TransportType>,
     scripts: List<InstalledScript>,
+    /** JS transports (and the way to manage them) are offered only with the experimental features on. */
+    showScripts: Boolean,
     onSelect: (TransportType, String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val shell = LocalShell.current
     AppDialog(title = "Транспорт", onDismiss = onDismiss, secondary = "Закрыть", enterSubmits = false) {
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AppTheme.spacing.s)) {
-            TextAction("Управлять транспортами", { onDismiss(); shell.open(ScriptsTab) })
+            if (showScripts) TextAction("Управлять транспортами", { onDismiss(); shell.open(ScriptsTab) })
             SectionLabel("Встроенные")
             native.forEach { type ->
                 TransportRow(
@@ -83,16 +85,18 @@ internal fun TransportPickerDialog(
                     checked = selected == type,
                 ) { onSelect(type, "") }
             }
-            Spacer(Modifier.height(AppTheme.spacing.xs))
-            SectionLabel("JS-транспорты")
-            if (scripts.isEmpty()) {
+            if (showScripts) {
+                Spacer(Modifier.height(AppTheme.spacing.xs))
+                SectionLabel("JS-транспорты")
+            }
+            if (showScripts && scripts.isEmpty()) {
                 Text(
                     "Пока нет установленных. Импортируйте на вкладке «Транспорты» — они появятся здесь.",
                     style = AppTheme.typography.bodySmall,
                     color = AppTheme.colors.textSecondary,
                 )
             }
-            scripts.forEach { s ->
+            if (showScripts) scripts.forEach { s ->
                 TransportRow(
                     icon = s.icon,
                     title = s.name,

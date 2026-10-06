@@ -30,6 +30,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -100,13 +101,16 @@ class ShellController {
 
 val LocalShell = staticCompositionLocalOf { ShellController() }
 
-val AppTabs: List<Tab> = listOf(HomeTab, ProfilesTab, io.openflux.desktop.ui.scripts.ScriptsTab, LogsTab, SettingsTab)
+/** The sections of the app: «Транспорты» (JS transports) is there only while the experimental features are on. */
+fun appTabs(experimental: Boolean): List<Tab> =
+    if (experimental) listOf(HomeTab, ProfilesTab, io.openflux.desktop.ui.scripts.ScriptsTab, LogsTab, SettingsTab)
+    else listOf(HomeTab, ProfilesTab, LogsTab, SettingsTab)
 
 @Composable
 fun OpenFluxApp(container: AppContainer, scrollbars: Scrollbars, shortcuts: Shortcuts, browsers: BrowserViews = NoBrowserViews) {
     val settings by container.settings.settings.collectAsState()
-    // Once a day: look for updates of the installed script transports.
-    LaunchedEffect(Unit) { runCatching { container.scriptUpdater.autoCheck() } }
+    // Once a day: look for updates of the installed script transports (only with the experimental features on).
+    LaunchedEffect(settings.experimental) { if (settings.experimental) runCatching { container.scriptUpdater.autoCheck() } }
     val dark = when (settings.theme) {
         ThemeMode.System -> isSystemInDarkTheme()
         ThemeMode.Light -> false
@@ -137,8 +141,14 @@ private fun AppShell(shell: ShellController, toaster: Toaster) {
     val touch = LocalTouchUi.current
     val settings by container.settings.settings.collectAsState()
     val incomingLink by container.incomingLink.collectAsState()
+    val tabs = appTabs(settings.experimental)
+    val currentTabs by rememberUpdatedState(tabs)
     TabNavigator(HomeTab) { navigator ->
         shell.tabNavigator = navigator
+        // Turned off while that section is open: it is gone, go home.
+        LaunchedEffect(settings.experimental) {
+            if (!settings.experimental && navigator.current.key == io.openflux.desktop.ui.scripts.ScriptsTab.key) navigator.current = HomeTab
+        }
         // The Profiles screen imports the link.
         LaunchedEffect(incomingLink) { if (incomingLink != null) navigator.current = ProfilesTab }
         // Back from another section returns home; screens handle their own
@@ -155,7 +165,7 @@ private fun AppShell(shell: ShellController, toaster: Toaster) {
                     else -> -1
                 }
                 when {
-                    index >= 0 -> { navigator.current = AppTabs[index]; true }
+                    index >= 0 -> { currentTabs.getOrNull(index)?.let { navigator.current = it }; true }
                     event.key == Key.Enter -> {
                         val state = container.connection.state.value
                         if (state.isActive) container.connection.disconnect() else HomeTab.connectSelected(container)
@@ -186,12 +196,12 @@ private fun AppShell(shell: ShellController, toaster: Toaster) {
             if (shell.widthClass == WidthClass.Phone) {
                 Column(Modifier.fillMaxSize()) {
                     content(Modifier.weight(1f).fillMaxWidth())
-                    BottomBar(current = navigator.current, tabs = AppTabs, onSelect = { navigator.current = it })
+                    BottomBar(current = navigator.current, tabs = tabs, onSelect = { navigator.current = it })
                 }
             } else Row(Modifier.fillMaxSize()) {
                 Sidebar(
                     current = navigator.current,
-                    tabs = AppTabs,
+                    tabs = tabs,
                     collapsed = collapsed,
                     canExpand = shell.widthClass != WidthClass.Compact,
                     onSelect = { navigator.current = it },
