@@ -298,6 +298,17 @@ class RuntimeArchiveTest {
     }
 
     @Test
+    fun theCheckIsAnnouncedAfterTheDownloadAndBeforeAnythingUnpacks() {
+        val data = bytes()
+        val steps = mutableListOf<String>()
+        runBlocking { archive(tempDir(), data, Origin(data)).fetch { steps += it } }
+        val check = steps.indexOfFirst { it.startsWith("Проверяю") }
+        assertTrue(check > 0, "no step announced the check: $steps")
+        assertTrue(steps.subList(0, check).all { it.startsWith("Скачиваю") || it.startsWith("Продолжаю") }, "$steps")
+        assertEquals(steps.size - 1, check, "nothing but the check comes after the download: $steps")
+    }
+
+    @Test
     fun theArchiveServerHandsKcefExactlyTheFile() {
         val data = bytes(300_000)
         val file = File(tempDir(), "runtime.tar.gz").apply { writeBytes(data) }

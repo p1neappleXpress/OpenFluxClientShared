@@ -224,8 +224,11 @@ object BuiltInBrowser {
                         download { custom(served?.url ?: packageUrl()) }
                         progress {
                             onLocating { step("Готовлю встроенный браузер…") }
-                            onDownloading { step("Устанавливаю встроенный браузер…") }
+                            // The archive comes from the disk (RuntimeArchive), so KCEF's own "downloading" is a
+                            // copy that takes a moment and says nothing; what follows is its work in the order it
+                            // does it: unpack, then install (the layout and the lock).
                             onExtracting { step("Распаковываю встроенный браузер…") }
+                            onInstall { step("Устанавливаю встроенный браузер…") }
                             onInitializing { step("Запускаю встроенный браузер…") }
                             onInitialized { initialized.complete(Unit) }
                         }

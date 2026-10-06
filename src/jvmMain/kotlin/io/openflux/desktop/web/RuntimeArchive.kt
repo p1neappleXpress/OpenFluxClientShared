@@ -70,6 +70,7 @@ internal class RuntimeArchive(
     /** The whole, verified archive; downloads, or finishes downloading, what is missing. */
     suspend fun fetch(onStep: (String) -> Unit): File {
         if (file.isFile) {
+            onStep("Проверяю скачанный браузер…")
             if (matches(file)) return file
             BrowserLog.problem("сохранённый архив браузера повреждён, скачиваю заново")
             file.delete()
@@ -87,7 +88,7 @@ internal class RuntimeArchive(
                     val had = part.length()
                     try {
                         download(source, canGiveWay = index < sources.lastIndex, onStep)
-                        return finish()
+                        return finish(onStep)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: OutOfSpace) {
@@ -221,7 +222,8 @@ internal class RuntimeArchive(
     }
 
     /** Checks the downloaded file and puts it under its final name. */
-    private fun finish(): File {
+    private fun finish(onStep: (String) -> Unit): File {
+        onStep("Проверяю скачанный браузер…")
         if (!matches(part)) {
             part.delete()
             throw IOException("контрольная сумма скачанного не совпала")
