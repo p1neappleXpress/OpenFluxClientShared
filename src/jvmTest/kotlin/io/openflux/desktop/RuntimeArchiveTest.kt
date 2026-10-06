@@ -349,10 +349,21 @@ class RuntimeArchiveTest {
     }
 
     @Test
-    fun aMirrorFromTheEnvironmentIsTriedBeforeTheCdnAndJunkIsIgnored() {
+    fun theStorageReleaseComesBeforeTheCdnAndAMirrorFromTheEnvironmentBeforeBoth() {
         val cdn = BuiltInBrowser.packageUrl()
-        assertEquals(listOf(cdn), BuiltInBrowser.runtimeSources(null))
-        assertEquals(listOf(cdn), BuiltInBrowser.runtimeSources("not a url"))
-        assertEquals(listOf("https://mirror.example/jbr.tar.gz", cdn), BuiltInBrowser.runtimeSources(" https://mirror.example/jbr.tar.gz "))
+        val storage = BuiltInBrowser.mirrorUrl()
+        assertEquals(listOf(storage, cdn), BuiltInBrowser.runtimeSources(null))
+        assertEquals(listOf(storage, cdn), BuiltInBrowser.runtimeSources("not a url"))
+        assertEquals(listOf("https://mirror.example/jbr.tar.gz", storage, cdn), BuiltInBrowser.runtimeSources(" https://mirror.example/jbr.tar.gz "))
+    }
+
+    @Test
+    fun theStorageReleaseHoldsTheFileUnderTheNameTheCdnHasIt() {
+        val url = BuiltInBrowser.mirrorUrl("Windows 11", "amd64")
+        assertEquals(
+            "https://github.com/p1neappleXpress/OpenFluxDesktop/releases/download/browser-runtime-21.0.6-b895.97/jbr_jcef-21.0.6-windows-x64-b895.97.tar.gz",
+            url,
+        )
+        assertEquals(BuiltInBrowser.packageUrl("Windows 11", "amd64").substringAfterLast('/'), url.substringAfterLast('/'))
     }
 }

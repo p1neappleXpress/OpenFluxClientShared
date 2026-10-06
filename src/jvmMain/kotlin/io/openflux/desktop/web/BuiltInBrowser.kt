@@ -408,12 +408,25 @@ object BuiltInBrowser {
     ): String = "jbr_jcef-$JBR_VERSION-${runtimeKey(os, arch)}-$JBR_BUILD.tar.gz"
 
     /**
+     * The same archive in the storage release of this app's repository (.github/workflows/browser-runtime.yml
+     * there copies it from the JetBrains CDN, byte for byte, and signs it): GitHub is reachable and fast
+     * where the CDN is throttled to about 1 KB/s.
+     */
+    internal fun mirrorUrl(
+        os: String = System.getProperty("os.name"),
+        arch: String = System.getProperty("os.arch"),
+    ): String = "https://github.com/$MIRROR_REPO/releases/download/browser-runtime-$JBR_VERSION-$JBR_BUILD/${runtimeFile(os, arch)}"
+
+    private const val MIRROR_REPO = "p1neappleXpress/OpenFluxDesktop"
+
+    /**
      * Where the archive may be fetched from, in order of preference: the address in
-     * OPENFLUX_BROWSER_RUNTIME_URL (a mirror a network can reach, or one of the user's own),
-     * then the JetBrains CDN. All serve the same file: it is checked against [RUNTIME_SHA512].
+     * OPENFLUX_BROWSER_RUNTIME_URL (a mirror a network can reach, or one of the user's own), the
+     * storage release ([mirrorUrl]), then the JetBrains CDN. All serve the same file: it is checked
+     * against [RUNTIME_SHA512], so where it comes from is only a matter of speed.
      */
     internal fun runtimeSources(env: String? = System.getenv("OPENFLUX_BROWSER_RUNTIME_URL")): List<String> =
-        listOfNotNull(env?.trim()?.takeIf { it.startsWith("http://") || it.startsWith("https://") }) + packageUrl()
+        listOfNotNull(env?.trim()?.takeIf { it.startsWith("http://") || it.startsWith("https://") }) + mirrorUrl() + packageUrl()
 
     /**
      * Whether KCEF can start from [dir] as it is: its install lock is only written once everything
