@@ -55,7 +55,9 @@ class JvmPlatformServices(
 
     override val exitL3Supported: Boolean = os.contains("win") || os.contains("linux")
     override val exitL3Needs: String? get() = when {
-        WindowsCoreElevation.windows && !WindowsElevation.elevated -> "при запуске Windows попросит разрешение администратора"
+        WindowsCoreElevation.windows && !WindowsElevation.elevated ->
+            "при запуске Windows попросит разрешение администратора, а драйвер WinDivert (0,4 МБ) скачается сам, если его нет"
+        WindowsCoreElevation.windows -> "драйвер WinDivert (0,4 МБ) скачается сам, если его нет"
         os.contains("linux") && !ExitL3.isRoot() -> "запустите OpenFlux от root"
         else -> null
     }
