@@ -142,6 +142,10 @@ interface PlatformServices {
      * when OpenFlux itself is not elevated; null when nothing is asked.
      */
     val fullTunnelPrompt: String? get() = null
+    /** Whether an exit node can forward packets here (the core's L3 backend): Windows and Linux, not macOS or a phone. */
+    val exitL3Supported: Boolean get() = false
+    /** What the L3 exit asks of the user on this computer, in their words; null when nothing. */
+    val exitL3Needs: String? get() = null
 
     /** Starts OpenFlux again as administrator (UAC) and exits this copy; false if that did not happen. */
     fun restartElevated(): Boolean

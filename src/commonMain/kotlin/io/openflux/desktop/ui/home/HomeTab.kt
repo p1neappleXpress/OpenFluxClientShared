@@ -52,6 +52,8 @@ import cafe.adriel.voyager.navigator.tab.TabOptions
 import io.openflux.desktop.model.ConnectionMode
 import io.openflux.desktop.model.ConnectionState
 import io.openflux.desktop.model.ExitAddress
+import io.openflux.desktop.model.ExitBackend
+import io.openflux.desktop.model.describe
 import io.openflux.desktop.model.Profile
 import io.openflux.desktop.model.TransportType
 import io.openflux.desktop.model.isActive
@@ -262,6 +264,27 @@ private fun ControlPanel(
             style = AppTheme.typography.caption,
             color = AppTheme.colors.textSecondary,
         )
+        // How the node forwards its clients' traffic. A phone's node is always L4.
+        if (mode == ConnectionMode.Exit && platform.kind == PlatformKind.Desktop) {
+            val exitBackend = model.settings.settings.collectAsState().value.exitBackend
+            Spacer(Modifier.height(AppTheme.spacing.l))
+            SectionLabel("Выход")
+            Spacer(Modifier.height(AppTheme.spacing.s))
+            Segmented(
+                options = ExitBackend.entries.filter { it == ExitBackend.L4 || platform.exitL3Supported },
+                selected = exitBackend,
+                label = { it.label },
+                onSelect = model::setExitBackend,
+                enabled = !state.isActive,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(AppTheme.spacing.xs))
+            Text(
+                if (state.isActive) "Выход меняется после отключения" else exitBackend.describe(platform.exitL3Needs),
+                style = AppTheme.typography.caption,
+                color = AppTheme.colors.textSecondary,
+            )
+        }
     }
 
     AppCard(modifier, padding = AppTheme.spacing.xl) {
@@ -385,6 +408,10 @@ private fun DetailsColumn(model: HomeScreenModel, selected: Profile?, state: Con
                 HorizontalRule()
             }
             KeyValueRow("Шифрование", if (profile.secret.isNotEmpty()) "AES-256-GCM" else "Нет ключа")
+            if (exitMode && !android) {
+                HorizontalRule()
+                KeyValueRow("Выход", settings.exitBackend.label)
+            }
             // Android's VPN carries the traffic itself; its proxy runs only without it.
             // The full tunnel carries the traffic itself; the proxies run only without it.
             if (!exitMode && !settings.fullTunnel) {

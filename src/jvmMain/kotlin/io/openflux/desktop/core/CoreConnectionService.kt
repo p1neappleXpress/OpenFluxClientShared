@@ -12,6 +12,7 @@ import io.openflux.desktop.platform.WindowsCoreElevation
 import io.openflux.desktop.platform.WindowsElevation
 import io.openflux.desktop.web.BrowserLog
 import io.openflux.desktop.model.ConnectionMode
+import io.openflux.desktop.model.ExitBackend
 import io.openflux.desktop.model.ConnectionState
 import io.openflux.desktop.model.CoreConfig
 import io.openflux.desktop.model.CorePaths
@@ -161,7 +162,11 @@ class CoreConnectionService(
                     "(./gradlew соберёт ядро сам) или укажите файл ядра в настройках",
             )
             if (current.fullTunnel && current.mode == ConnectionMode.Client) checkFullTunnel(core)
+            val exitL3 = current.mode == ConnectionMode.Exit && current.exitBackend == ExitBackend.L3
+            if (exitL3) ExitL3.problem()?.let { throw IllegalStateException(it) }
             val runtime = AppDirs.runtime
+            // The core finds WinDivert in the folder it is run in: fetched when it is not beside the core.
+            val workDir = if (exitL3 && isWindows) WinDivertFiles().folderFor(core) { log(LogLevel.Info, it) } else runtime
             val tag = profile.id.take(8)
             val keyFile = if (profile.secret.isNotEmpty()) File(runtime, "key-$tag").also {
                 it.writeText(profile.secret)
@@ -189,10 +194,11 @@ class CoreConnectionService(
                 restrictToOwner(confFile)
                 files += confFile
             }
-            log(LogLevel.Info, "Запуск ядра: ${profile.name} (${current.mode.label})")
+            log(LogLevel.Info, "Запуск ядра: ${profile.name} (${current.mode.label}${if (current.mode == ConnectionMode.Exit) ", ${current.exitBackend.label}" else ""})")
             var command = listOf(core.absolutePath) + launch.arguments
-            val elevate = current.fullTunnel && current.mode == ConnectionMode.Client &&
-                ((MacElevation.mac && !MacElevation.root) || (isWindows && !WindowsElevation.elevated))
+            val elevate = (current.fullTunnel && current.mode == ConnectionMode.Client &&
+                ((MacElevation.mac && !MacElevation.root) || (isWindows && !WindowsElevation.elevated))) ||
+                (exitL3 && ExitL3.needsUac(System.getProperty("os.name"), WindowsElevation.elevated))
             val elevated = if (elevate) {
                 val stamp = System.currentTimeMillis()
                 fun output(suffix: String) = File(runtime, "core-$tag-$stamp$suffix").apply { writeText("") }.also {
@@ -206,9 +212,14 @@ class CoreConnectionService(
                 if (isWindows) {
                     val out = output(".out.log")
                     val err = output(".err.log")
-                    command = WindowsCoreElevation.command(command, runtime, out, err, stop, app)
-                    log(LogLevel.Info, "Windows попросит разрешение администратора: ядру нужны права для адаптера Wintun и маршрутов")
-                    Elevated(listOf(out, err), stop, WindowsCoreElevation::cancelled, "Нет разрешения администратора: без него режим «Весь трафик» не запускается")
+                    command = WindowsCoreElevation.command(command, workDir, out, err, stop, app)
+                    if (exitL3) {
+                        log(LogLevel.Info, "Windows попросит разрешение администратора: ноде L3 нужны права, чтобы перехватывать пакеты через WinDivert")
+                        Elevated(listOf(out, err), stop, WindowsCoreElevation::cancelled, "Нет разрешения администратора: без него нода L3 не запускается, выберите L4")
+                    } else {
+                        log(LogLevel.Info, "Windows попросит разрешение администратора: ядру нужны права для адаптера Wintun и маршрутов")
+                        Elevated(listOf(out, err), stop, WindowsCoreElevation::cancelled, "Нет разрешения администратора: без него режим «Весь трафик» не запускается")
+                    }
                 } else {
                     val out = output(".log")
                     command = MacElevation.command(command, out, stop, app)
@@ -217,7 +228,7 @@ class CoreConnectionService(
                 }
             } else null
             val process = ProcessBuilder(command)
-                .directory(AppDirs.runtime)
+                .directory(if (exitL3 && isWindows) workDir else AppDirs.runtime)
                 .redirectErrorStream(true)
                 .start()
             val newRun = Run(profile, current, process, files, launch.httpProxyAddress, launch.usesIpc, elevated)
