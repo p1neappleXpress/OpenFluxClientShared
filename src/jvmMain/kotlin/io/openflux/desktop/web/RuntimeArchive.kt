@@ -78,19 +78,25 @@ internal class RuntimeArchive(
         var last = "нет источников"
         var empty = 0
         var attempts = 0
-        while (empty < rounds && attempts++ < MAX_ATTEMPTS) {
+        while (empty < rounds && attempts < MAX_ATTEMPTS) {
             val before = part.length()
             for ((index, source) in sources.withIndex()) {
-                try {
-                    download(source, canGiveWay = index < sources.lastIndex, onStep)
-                    return finish()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: OutOfSpace) {
-                    throw IllegalStateException(e.message, e)
-                } catch (e: Exception) {
-                    last = e.message ?: e.javaClass.simpleName
-                    BrowserLog.problem("скачивание с ${BrowserLog.short(source)}: $last (на диске ${part.length() / MB} МБ)")
+                // A source that dropped after bringing data is asked again, from where it stopped;
+                // the next one is for a source that brought nothing or was too slow.
+                while (attempts++ < MAX_ATTEMPTS) {
+                    val had = part.length()
+                    try {
+                        download(source, canGiveWay = index < sources.lastIndex, onStep)
+                        return finish()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: OutOfSpace) {
+                        throw IllegalStateException(e.message, e)
+                    } catch (e: Exception) {
+                        last = e.message ?: e.javaClass.simpleName
+                        BrowserLog.problem("скачивание с ${BrowserLog.short(source)}: $last (на диске ${part.length() / MB} МБ)")
+                        if (e is TooSlow || part.length() <= had) break
+                    }
                 }
             }
             if (part.length() > before) continue
@@ -190,7 +196,7 @@ internal class RuntimeArchive(
                     lastData.set(now)
                     if (now - windowStart >= slowWindowMs) {
                         val rate = windowBytes * 1000 / (now - windowStart)
-                        if (rate < slowBytesPerSecond && canGiveWay) throw IOException("источник слишком медленный (${rate / 1024} КБ/с)")
+                        if (rate < slowBytesPerSecond && canGiveWay) throw TooSlow("источник слишком медленный (${rate / 1024} КБ/с)")
                         onStep(progress(done, total, resumed, rate.takeIf { it < slowBytesPerSecond }))
                         windowStart = now
                         windowBytes = 0
@@ -237,6 +243,9 @@ internal class RuntimeArchive(
         }
         return digest.digest().joinToString("") { "%02x".format(it) } == expected
     }
+
+    /** Not worth asking this source again: the next one may do better. */
+    private class TooSlow(message: String) : IOException(message)
 
     /** Not worth another source or another round: no disk will have the room next time either. */
     private class OutOfSpace(message: String) : IOException(message)

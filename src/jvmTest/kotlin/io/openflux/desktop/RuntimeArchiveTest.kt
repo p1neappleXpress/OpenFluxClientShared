@@ -208,6 +208,27 @@ class RuntimeArchiveTest {
     }
 
     @Test
+    fun aSourceThatDroppedWithDataIsAskedAgainBeforeTheNextOne() {
+        val data = bytes()
+        val mirror = Origin(data).apply { cuts.set(2); cutAfter = 800_000 }
+        val cdn = Origin(data)
+        val file = runBlocking { archive(tempDir(), data, mirror, cdn, rounds = 1).fetch { } }
+        assertContentEquals(data, file.readBytes())
+        assertTrue(cdn.seen.isEmpty(), "went on to the next source after ${mirror.seen.size} requests")
+        assertTrue(mirror.seen.size >= 3)
+    }
+
+    @Test
+    fun aSourceThatBringsNothingGivesWayToTheNextWithoutBeingHammered() {
+        val data = bytes(500_000)
+        val dead = Origin(data).apply { failFrom = 0 }
+        val cdn = Origin(data)
+        val file = runBlocking { archive(tempDir(), data, dead, cdn).fetch { } }
+        assertContentEquals(data, file.readBytes())
+        assertEquals(1, dead.seen.size)
+    }
+
+    @Test
     fun theLastSourceIsNeverAbandonedForBeingSlow() {
         val data = bytes(600_000)
         val only = Origin(data).apply { rate = 300_000 }

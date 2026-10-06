@@ -198,7 +198,7 @@ object BuiltInBrowser {
         val step = { text: String -> if (text != last) { last = text; BrowserLog.info(text); onStep(text) } }
         val dir = installDir
         BrowserLog.info(
-            "запуск: папка $dir, установлен ${File(dir, "install.lock").isFile}, пакет ${packageUrl()}, " +
+            "запуск: папка $dir, установлен ${runtimeInstalled(dir)}, пакет ${packageUrl()}, " +
                 "java ${System.getProperty("java.version")} (${System.getProperty("java.home")}), ${System.getProperty("os.name")} ${System.getProperty("os.arch")}",
         )
         runCatching { BrowserLog.cefLogFile.delete() }
