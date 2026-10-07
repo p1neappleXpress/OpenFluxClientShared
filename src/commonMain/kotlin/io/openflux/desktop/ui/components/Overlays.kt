@@ -12,7 +12,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -232,6 +234,57 @@ fun AppDialog(
                 }
             }
         }
+        }
+    }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+}
+
+/**
+ * A page that takes the whole window: a script's own setup or settings page,
+ * which is a web page and wants all the room there is, not a dialog's 700 dp.
+ * A bar with the [title], the [actions] and "Закрыть" over [content], which
+ * gets everything below it (give it a `weight(1f)` box). Esc closes it, a click
+ * outside cannot (there is no outside).
+ */
+@Composable
+fun AppFullScreenDialog(
+    title: String,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    closeLabel: String = "Закрыть",
+    actions: @Composable RowScope.() -> Unit = {},
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val focus = remember { FocusRequester() }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false),
+    ) {
+        Column(
+            modifier
+                .fillMaxSize()
+                .background(AppTheme.colors.surface)
+                .focusRequester(focus)
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) { onDismiss(); true } else false
+                }
+                .padding(horizontal = AppTheme.spacing.l, vertical = AppTheme.spacing.m),
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    title,
+                    style = AppTheme.typography.sectionTitle,
+                    color = AppTheme.colors.text,
+                    maxLines = 2,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(AppTheme.spacing.s))
+                actions()
+                Spacer(Modifier.width(AppTheme.spacing.s))
+                AppButton(closeLabel, onDismiss, style = ButtonStyle.Secondary)
+            }
+            Spacer(Modifier.height(AppTheme.spacing.m))
+            content()
         }
     }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }

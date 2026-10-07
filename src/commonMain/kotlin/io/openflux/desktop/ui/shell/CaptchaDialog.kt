@@ -16,9 +16,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import io.openflux.desktop.model.CaptchaPrompt
+import io.openflux.desktop.service.ConnectionService
+import io.openflux.desktop.ui.BrowserPage
 import io.openflux.desktop.ui.LocalBrowserViews
 import io.openflux.desktop.service.LocalAppContainer
 import io.openflux.desktop.ui.components.AppDialog
+import io.openflux.desktop.ui.components.AppFullScreenDialog
 import io.openflux.desktop.ui.components.Banner
 import io.openflux.desktop.ui.components.TextAction
 import io.openflux.desktop.ui.components.Tone
@@ -42,32 +46,29 @@ fun CaptchaDialog() {
     val page by connection.captchaPage.collectAsState()
     val browsers = LocalBrowserViews.current
     val current = prompt ?: return
-    val isSetupPage = current.own
+    // A script's own page is a web page that wants the whole window, not a dialog's width.
+    if (current.own) {
+        SetupPageScreen(current, page, connection)
+        return
+    }
     // The check page gets what the window can spare, within reason.
     val window = windowSize()
     val pageHeight = (window.height - 330.dp).coerceIn(180.dp, 640.dp)
     AppDialog(
         modifier = Modifier.fillUpTo(if (window.width >= 1400.dp) 960.dp else 760.dp),
-        title = when {
-            // For a script's own page the reason is the title its author wrote.
-            isSetupPage -> current.reason.ifBlank {
-                if (current.transport.isNotBlank()) "Настройка «${current.transport}»" else "Транспорт просит настройку"
-            }
-            current.remote -> "Нода просит пройти проверку Яндекса"
-            else -> "Яндекс просит пройти проверку"
-        },
+        title = if (current.remote) "Нода просит пройти проверку Яндекса" else "Яндекс просит пройти проверку",
         onDismiss = connection::dismissCaptcha,
-        primary = if (isSetupPage) null else if (current.busy) "Передаю…" else "Готово, проверка пройдена",
+        primary = if (current.busy) "Передаю…" else "Готово, проверка пройдена",
         onPrimary = connection::submitCaptcha,
-        primaryEnabled = !isSetupPage && !current.busy && page != null,
+        primaryEnabled = !current.busy && page != null,
         secondary = "Позже",
     ) {
         Text(
-            when {
-                isSetupPage -> "Заполните страницу настройки ниже и нажмите её собственную кнопку: OpenFlux передаст данные транспорту сам."
-                current.remote -> "Страница открыта с адреса ноды. Пройдите проверку, затем нажмите «Готово»: " +
+            if (current.remote) {
+                "Страница открыта с адреса ноды. Пройдите проверку, затем нажмите «Готово»: " +
                     "cookies уйдут ноде, и канал через Яндекс поднимется."
-                else -> "Пройдите проверку, затем нажмите «Готово». Если страница откроется без проверки, OpenFlux передаст cookies сам."
+            } else {
+                "Пройдите проверку, затем нажмите «Готово». Если страница откроется без проверки, OpenFlux передаст cookies сам."
             },
             style = AppTheme.typography.body,
             color = AppTheme.colors.text,
@@ -88,10 +89,42 @@ fun CaptchaDialog() {
             else Text(current.progress.ifEmpty { "Открываю страницу проверки…" }, style = AppTheme.typography.body, color = AppTheme.colors.textSecondary)
         }
         Spacer(Modifier.height(AppTheme.spacing.s))
-        TextAction(
-            if (isSetupPage) "Открыть страницу настройки заново" else "Открыть страницу проверки заново",
-            connection::openCaptcha,
-            enabled = !current.busy,
+        TextAction("Открыть страницу проверки заново", connection::openCaptcha, enabled = !current.busy)
+    }
+}
+
+/** A script's own setup page (inline html or its own 127.0.0.1 server) over the whole window; the page submits itself. */
+@Composable
+private fun SetupPageScreen(current: CaptchaPrompt, page: BrowserPage?, connection: ConnectionService) {
+    val browsers = LocalBrowserViews.current
+    AppFullScreenDialog(
+        // The reason is the title the script's author wrote.
+        title = current.reason.ifBlank {
+            if (current.transport.isNotBlank()) "Настройка «${current.transport}»" else "Транспорт просит настройку"
+        },
+        onDismiss = connection::dismissCaptcha,
+        closeLabel = "Позже",
+        actions = {
+            TextAction("Открыть заново", connection::openCaptcha, enabled = !current.busy)
+        },
+    ) {
+        Text(
+            "Заполните страницу настройки и нажмите её собственную кнопку: OpenFlux передаст данные транспорту сам.",
+            style = AppTheme.typography.bodySmall,
+            color = AppTheme.colors.textSecondary,
         )
+        if (current.error.isNotBlank()) {
+            Spacer(Modifier.height(AppTheme.spacing.s))
+            Banner(current.error, Tone.Danger, icon = Icons.Rounded.ErrorOutline)
+        }
+        Spacer(Modifier.height(AppTheme.spacing.s))
+        Box(
+            Modifier.fillMaxWidth().weight(1f).clip(AppTheme.shapes.card)
+                .border(1.dp, AppTheme.colors.border, AppTheme.shapes.card),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (page != null) browsers.Page(page, Modifier.fillMaxSize())
+            else Text(current.progress.ifEmpty { "Открываю страницу настройки…" }, style = AppTheme.typography.body, color = AppTheme.colors.textSecondary)
+        }
     }
 }
