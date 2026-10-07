@@ -18,6 +18,9 @@ import io.openflux.desktop.web.KcefSettingsPageHost
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 /** Wires the desktop implementations together; called once from main. */
 fun createAppContainer(appVersion: String): AppContainer {
@@ -26,6 +29,14 @@ fun createAppContainer(appVersion: String): AppContainer {
     val phpHosting = PhpHostingService(CorePhpTransport(settings, binary), clock = System::currentTimeMillis)
     val platform = JvmPlatformServices(appVersion, binary) { binary.version() }
     val scripts = DesktopScriptRepository(platform)
+    // The JS (goja) script transports are an experimental feature: nothing of them runs until the
+    // user turns "Экспериментальные функции" on. Then the transports shipped with the app are
+    // installed (or upgraded), which runs the core once per package, off the UI thread.
+    CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
+        settings.settings.map { it.experimental }.distinctUntilChanged().collect { on ->
+            if (on) runCatching { scripts.syncBundled() }
+        }
+    }
     return AppContainer(
         profiles = FileProfileRepository(AppDirs.config),
         settings = settings,

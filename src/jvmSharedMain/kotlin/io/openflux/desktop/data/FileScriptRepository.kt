@@ -34,6 +34,7 @@ abstract class FileScriptRepository(
     init { dir.mkdirs() }
 
     private val registryFile = File(dir, "registry.json")
+    private val offeredFile = File(dir, OFFERED_FILE)
     protected val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
 
     private val _scripts = MutableStateFlow(load())
@@ -86,8 +87,15 @@ abstract class FileScriptRepository(
         val name = report["name"]?.jsonPrimitive?.contentOrNull?.ifBlank { null } ?: "script"
         val isFlux = data.size >= 2 && data[0] == 'P'.code.toByte() && data[1] == 'K'.code.toByte()
         val fileName = if (isFlux) "$name.flux" else "$name.js"
+        val previous = byId(name)
         File(dir, fileName).writeBytes(data)
         if (!isFlux) File(dir, "$fileName.sig").writeBytes(sig)
+        // A bare .js replaced by a .flux (or the other way round) leaves the old file behind.
+        if (previous != null && previous.fileName != fileName) {
+            File(dir, previous.fileName).delete()
+            File(dir, previous.fileName + ".sig").delete()
+            File(dir, previous.fileName + ".prev").delete()
+        }
 
         val script = InstalledScript(
             id = name,
@@ -105,6 +113,67 @@ abstract class FileScriptRepository(
         ).withTrustReport(report)
         upsert(script)
         return script
+    }
+
+    /**
+     * Brings the scripts shipped inside the app into the registry, on the first
+     * run of the experimental features and after every update of the app:
+     *  - one this installation was never offered is installed (so a new release
+     *    adds its new transports to people who already have the old ones);
+     *  - one the user deleted stays deleted (what was offered is remembered in
+     *    [OFFERED_FILE]), one they switched off stays off, one they added
+     *    themselves under the same name is left alone;
+     *  - an installed bundled copy is replaced when the shipped one is newer
+     *    ([isNewer]: the shipped version first), or when it is the same version
+     *    but arrives as a .flux package, which, unlike a bare .js, says where
+     *    its updates come from.
+     * [officialKey] is the key the shipped files must verify under.
+     */
+    protected fun syncShipped(
+        shipped: List<ShippedScript>,
+        officialKey: String,
+        isNewer: (shippedVersion: String, installedVersion: String) -> Boolean = { a, b -> ScriptVersions.compare(a, b) > 0 },
+    ) {
+        val offered = readOffered()
+        if (offered != null) {
+            alreadyOffered += offered
+        } else if (scripts.value.any { it.source == ScriptSource.Bundled }) {
+            // An installation from before the list existed: that build installed the five
+            // transports it shipped all at once, so what is missing of them was deleted.
+            alreadyOffered += LEGACY_SHIPPED
+        }
+        for (item in shipped) {
+            runCatching {
+                val report = report(item.data, item.sig, officialKey)?.takeIf { it.isValid() } ?: return@runCatching
+                val name = report["name"]?.jsonPrimitive?.contentOrNull?.ifBlank { null } ?: return@runCatching
+                val version = report["version"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val installed = byId(name)
+                if (installed == null) {
+                    if (name in alreadyOffered) return@runCatching
+                    install(item.data, item.sig, officialKey, ScriptSource.Bundled, "bundled:${item.file}", now = 0L)
+                    alreadyOffered += name
+                    return@runCatching
+                }
+                if (installed.source != ScriptSource.Bundled) return@runCatching
+                val wrapped = installed.fileName.endsWith(".js") && item.file.endsWith(".flux")
+                if (!isNewer(version, installed.version) && !(wrapped && version == installed.version)) return@runCatching
+                val wasEnabled = installed.enabled
+                install(item.data, item.sig, officialKey, ScriptSource.Bundled, "bundled:${item.file}", now = installed.addedAt)
+                if (!wasEnabled) setEnabled(name, false)
+            }
+        }
+        writeOffered()
+    }
+
+    private val alreadyOffered = mutableSetOf<String>()
+
+    /** The names this installation was offered, null when it has never recorded them. */
+    private fun readOffered(): Set<String>? = runCatching {
+        if (!offeredFile.exists()) null else json.decodeFromString<List<String>>(offeredFile.readText()).toSet()
+    }.getOrNull()
+
+    private fun writeOffered() {
+        runCatching { offeredFile.writeText(json.encodeToString(alreadyOffered.sorted())) }
     }
 
     override fun repin(id: String, pubkeyHex: String, fingerprint: String) {
@@ -145,4 +214,15 @@ abstract class FileScriptRepository(
     private fun persist() {
         runCatching { registryFile.writeText(json.encodeToString(_scripts.value)) }
     }
+
+    private companion object {
+        /** Where the names of the shipped transports this installation was offered are kept. */
+        const val OFFERED_FILE = "bundled-offered.json"
+
+        /** What every build before the offered list shipped. */
+        val LEGACY_SHIPPED = listOf("yandex", "vyandex", "boards", "mailru", "cupsonline")
+    }
 }
+
+/** A transport shipped inside the app: its file (a .flux package, or a bare .js) and the detached signature (empty for a .flux). */
+class ShippedScript(val file: String, val data: ByteArray, val sig: ByteArray = ByteArray(0))
