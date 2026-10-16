@@ -5,7 +5,8 @@ import dev.datlag.kcef.KCEFBrowser
 import dev.datlag.kcef.KCEFClient
 import io.openflux.desktop.data.AppDirs
 import io.openflux.desktop.model.SetupPages
-import io.openflux.desktop.ui.BrowserPage
+import io.openflux.app.platform.BrowserPage
+import io.openflux.desktop.model.YandexDisk
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -53,12 +54,25 @@ class KcefPage internal constructor(private val browser: KCEFBrowser) : BrowserP
 
     val url: String get() = browser.url.orEmpty()
 
+    /** Every main-frame address since the page opened (onAddressChange), oldest first. */
+    val history = java.util.concurrent.CopyOnWriteArrayList<String>()
+
     val loading: Boolean get() = runCatching { browser.isLoading }.getOrDefault(true)
 
     @Volatile var closed = false
         private set
 
     fun load(url: String) = browser.loadURL(url)
+
+    /**
+     * Makes this page (and only it) send [userAgent], in its requests and
+     * in navigator.userAgent, from its next navigation on.
+     */
+    fun overrideUserAgent(userAgent: String) {
+        val params = kotlinx.serialization.json.buildJsonObject { put("userAgent", JsonPrimitive(userAgent)) }
+        browser.devToolsClient.executeDevToolsMethod("Emulation.setUserAgentOverride", params.toString())
+            .get(10, java.util.concurrent.TimeUnit.SECONDS)
+    }
 
     /**
      * Runs [expression] (a JavaScript expression, a Promise is awaited) in
@@ -98,6 +112,7 @@ class KcefPage internal constructor(private val browser: KCEFBrowser) : BrowserP
         if (closed) return
         closed = true
         BuiltInBrowser.forgetSetupPage(browser)
+        BuiltInBrowser.forgetPage(browser)
         val dispose = {
             val view = browser.uiComponent
             view.parent?.let { parent ->
@@ -134,6 +149,14 @@ object BuiltInBrowser {
      * registered.
      */
     private class SetupPage(val prefix: String, val onSubmit: ((String) -> Unit)?)
+
+    /** The open pages by browser, for what CEF reports about a browser (its addresses). */
+    private val pages = ConcurrentHashMap<KCEFBrowser, KcefPage>()
+    internal fun forgetPage(browser: KCEFBrowser) { pages -= browser }
+    private fun pageOf(browser: CefBrowser): KcefPage? {
+        val id = browser.identifier
+        return pages.entries.firstOrNull { (b, _) -> b.identifier == id }?.value
+    }
 
     private val setupPages = ConcurrentHashMap<KCEFBrowser, SetupPage>()
     internal fun forgetSetupPage(browser: KCEFBrowser) { setupPages -= browser }
@@ -174,12 +197,52 @@ object BuiltInBrowser {
      * goes out through the node's proxy. [onStep] reports the first-run
      * download.
      */
-    suspend fun open(url: String, upstream: String? = null, onStep: (String) -> Unit = {}): KcefPage {
+    suspend fun open(url: String, upstream: String? = null, onStep: (String) -> Unit = {}, userAgent: String? = null): KcefPage {
         val client = client(onStep)
         proxy.upstream = upstream
-        return create(client, url, setup = null).also {
-            BrowserLog.info("открываю ${BrowserLog.short(url)}" + if (upstream != null) " через прокси ноды $upstream" else " напрямую")
+        // A page with its own user agent starts blank: the agent can be set
+        // only once the page exists, and a navigation asked for before its
+        // first load has finished is dropped by that load.
+        val first = if (userAgent == null) url else "about:blank"
+        val loaded = CompletableDeferred<Unit>()
+        val page = create(client, first, setup = null, firstLoad = if (userAgent != null) loaded else null)
+        BrowserLog.info("открываю ${BrowserLog.short(url)}" + if (upstream != null) " через прокси ноды $upstream" else " напрямую")
+        if (userAgent != null) {
+            withTimeoutOrNull(START_TIMEOUT_MS) { loaded.await() }
+                ?: run { page.close(); throw IllegalStateException("Встроенный браузер не открыл страницу") }
+            withContext(Dispatchers.IO) { page.overrideUserAgent(userAgent) }
+            BrowserLog.info("свой user agent для страницы: $userAgent")
+            page.load(url)
         }
+        return page
+    }
+
+    /** Pages whose first load is awaited (see [open]), until it ends. */
+    private val firstLoads = ConcurrentHashMap<Any, CompletableDeferred<Unit>>()
+
+    /**
+     * Chromium's own user agent for this OS, for sign-in pages that must
+     * not see the core's (a Firefox one): VK ID for Mail.ru breaks under it.
+     */
+    fun chromiumUserAgent(os: String = System.getProperty("os.name")): String {
+        val version = runCatching {
+            Regex("""Chromium Version = (\d+)""").find(CefApp.getInstance().version.toString())?.groupValues?.get(1)
+        }.getOrNull() ?: "122"
+        val platform = when {
+            os.startsWith("Mac", ignoreCase = true) -> "Macintosh; Intel Mac OS X 10_15_7"
+            os.startsWith("Windows", ignoreCase = true) -> "Windows NT 10.0; Win64; x64"
+            else -> "X11; Linux x86_64"
+        }
+        return "Mozilla/5.0 ($platform) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$version.0.0.0 Safari/537.36"
+    }
+
+    /**
+     * Starts the browser (downloading it on first use) without a page:
+     * cookies can be set only once it runs, and must be before the page that
+     * needs them is created.
+     */
+    suspend fun ensureStarted(onStep: (String) -> Unit = {}) {
+        client(onStep)
     }
 
     /**
@@ -218,14 +281,17 @@ object BuiltInBrowser {
     }
 
     /** Off-screen: frames are drawn by OsrView, see there why. */
-    private suspend fun create(client: KCEFClient, url: String, setup: SetupPage?): KcefPage = withContext(Dispatchers.Swing) {
+    private suspend fun create(client: KCEFClient, url: String, setup: SetupPage?, firstLoad: CompletableDeferred<Unit>? = null): KcefPage = withContext(Dispatchers.Swing) {
         val view = OsrView()
         val browser = client.createBrowser(url, CefRendering.CefRenderingWithHandler(view.renderHandler, view), false)
         view.browser = browser
         if (setup != null) setupPages[browser] = setup
+        // Keyed by the render handler: handlers get JCEF's own browser,
+        // not KCEF's wrapper, but both hand out this one.
+        if (firstLoad != null) firstLoads[view.renderHandler] = firstLoad
         // Create it now, not when shown: scripts and cookies work before the page is on screen.
         browser.createImmediately()
-        KcefPage(browser)
+        KcefPage(browser).also { pages[browser] = it }
     }
 
     /** Cookies the browser would send to [url], HTTP-only ones included. */
@@ -244,6 +310,24 @@ object BuiltInBrowser {
         // CEF never calls the visitor when there are no cookies.
         withTimeoutOrNull(1500) { done.await() }
         return found.toList()
+    }
+
+    internal fun cookieFor(name: String, value: String, domain: String): CefCookie {
+        val now = java.util.Date()
+        return CefCookie(name, value, domain, "/", true, true, now, now, false, null)
+    }
+
+    /**
+     * Puts a saved sign-in back into the browser before a page opens, so
+     * the page is signed in without the user typing anything.
+     */
+    fun setCookies(url: String, cookies: Map<String, String>, domain: String) {
+        if (client == null || cookies.isEmpty()) return // see cookies()
+        val manager = CefCookieManager.getGlobalManager()
+        for ((name, value) in cookies) {
+            check(manager.setCookie(url, cookieFor(name, value, domain))) { "Встроенный браузер не принял cookies" }
+        }
+        manager.flushStore(null)
     }
 
     /** Forgets every cookie: a sign-in must not outlive what it was made for. */
@@ -402,7 +486,10 @@ object BuiltInBrowser {
             }
 
             override fun onLoadEnd(browser: CefBrowser?, frame: CefFrame?, httpStatusCode: Int) {
-                if (frame?.isMain == true) BrowserLog.info("страница ${browser?.identifier}: загружена, HTTP $httpStatusCode, ${BrowserLog.short(frame.url)}")
+                if (frame?.isMain == true) {
+                    BrowserLog.info("страница ${browser?.identifier}: загружена, HTTP $httpStatusCode, ${BrowserLog.short(frame.url)}")
+                    browser?.renderHandler?.let { firstLoads.remove(it)?.complete(Unit) }
+                }
                 if (frame?.isMain == true && browser != null && isSetupPage(browser, frame.url)) {
                     browser.executeJavaScript(BRIDGE_JS, frame.url, 0)
                 }
@@ -415,6 +502,7 @@ object BuiltInBrowser {
         client.addDisplayHandler(object : CefDisplayHandlerAdapter() {
             override fun onAddressChange(browser: CefBrowser?, frame: CefFrame?, url: String?) {
                 if (frame?.isMain == true) BrowserLog.info("страница ${browser?.identifier}: адрес ${BrowserLog.short(url)}")
+                if (frame?.isMain == true && browser != null && url != null) pageOf(browser)?.history?.add(url)
             }
 
             override fun onConsoleMessage(browser: CefBrowser?, level: CefSettings.LogSeverity?, message: String?, source: String?, line: Int): Boolean {
@@ -473,7 +561,7 @@ object BuiltInBrowser {
         listOf("jcef_helper.exe", "jcef_helper").map { File(dir, it) }.firstOrNull(File::isFile)?.absolutePath
 
     private const val START_TIMEOUT_MS = 60_000L
-    const val YANDEX_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0"
+    const val YANDEX_USER_AGENT = YandexDisk.USER_AGENT
 
     /** Defines window.openfluxSubmit for a setup page, routed through the same query channel [evaluate] uses. */
     private val BRIDGE_JS = SetupPages.bridgeScript(

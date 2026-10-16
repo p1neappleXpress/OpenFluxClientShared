@@ -41,6 +41,9 @@ data class CoreLaunch(
 object CoreConfig {
     const val LOOPBACK = "127.0.0.1"
 
+    /** Why a profile with Telemost alone does not connect through the full tunnel. */
+    const val TELEMOST_TUN = "Телемост пока не работает в режиме «Весь трафик»: выключите его в настройках или добавьте профилю другой транспорт"
+
     /** Why a profile with a JS transport does not connect while the experimental features are off. */
     const val SCRIPTS_OFF = "В профиле JS-транспорт, а экспериментальные функции выключены: включите их в настройках («Экспериментальные функции»)"
 
@@ -62,6 +65,7 @@ object CoreConfig {
         require(problems.isEmpty()) { problems.first() }
         require(settings.experimental || profile.carriers.none { it.type == TransportType.SCRIPT }) { SCRIPTS_OFF }
         val exit = settings.mode == ConnectionMode.Exit
+        if (exit) profile.exitProblem()?.let { throw IllegalArgumentException(it) }
         val socks = "$LOOPBACK:${settings.socksPort}"
         val http = "$LOOPBACK:${settings.socksPort + 1}"
         if (profile.stream) {
@@ -91,12 +95,16 @@ object CoreConfig {
             }
             appendLine("EncryptionKeyFile = ${confValue(paths.keyFile ?: error("Session requires a key"))}")
             appendLine("CookieStore = ${confValue(paths.cookieStore)}")
+            // The core refuses Telemost under its TUN: the rest of the profile still connects.
             val specs = profile.sessionSpecs().filterNot { exit && it.type == TransportType.DIRECT }
+                .filterNot { !exit && settings.fullTunnel && it.type == TransportType.TELEMOST }
+            require(specs.isNotEmpty()) { TELEMOST_TUN }
             for (spec in specs) {
                 appendLine()
                 appendLine("[Transport ${spec.name}]")
                 appendLine("Type = ${spec.type.cliName}")
                 appendLine("Priority = ${spec.priority}")
+                if (spec.network != NetworkKind.Default) appendLine("Network = ${spec.network.cli}")
                 when (spec.type.kind) {
                     ValueKind.DocumentUrl -> appendLine("URL = ${confValue(spec.value)}")
                     ValueKind.Address -> appendLine("Dial = ${confValue(spec.value)}")
@@ -178,6 +186,7 @@ object CoreConfig {
     }
 
     private fun classic(profile: Profile, settings: AppSettings, paths: CorePaths, exit: Boolean, socks: String, http: String): CoreLaunch {
+        require(exit || !settings.fullTunnel || profile.transport != TransportType.TELEMOST) { TELEMOST_TUN }
         val args = buildList {
             if (exit) {
                 // The same exit a Session profile runs, serving classic

@@ -1,5 +1,6 @@
 package io.openflux.desktop.platform
 
+import io.openflux.desktop.data.CupsRooms
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
@@ -11,6 +12,7 @@ import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import io.openflux.desktop.core.CoreBinary
+import io.openflux.desktop.model.CoreSource
 import io.openflux.desktop.core.ExitL3
 import io.openflux.desktop.service.PlatformServices
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +49,10 @@ class JvmPlatformServices(
     private val random = SecureRandom()
 
     override val coreVersion: String get() = coreVersionProvider()
+    override val utcOffsetSeconds: Int get() = java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000
+    override val deviceName: String
+        get() = runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: System.getenv("COMPUTERNAME") ?: "Компьютер"
     override val clientRepo: String get() = RELEASE_REPO
     override val systemProxySupported: Boolean = os.contains("win")
     override val fullTunnelSupported: Boolean = os.contains("win") || MacElevation.mac
@@ -117,7 +123,8 @@ class JvmPlatformServices(
     }
 
     override fun openUrl(url: String) {
-        runCatching { Desktop.getDesktop().browse(URI(url)) }
+        // browse() is for web pages; a mail link goes to the mail client (the share buttons' «Почта»).
+        runCatching { if (url.startsWith("mailto:")) Desktop.getDesktop().mail(URI(url)) else Desktop.getDesktop().browse(URI(url)) }
     }
 
     override fun newSecret(): String {
@@ -128,10 +135,50 @@ class JvmPlatformServices(
 
     override fun now(): Long = System.currentTimeMillis()
 
+    override suspend fun newCupsRooms(): String = CupsRooms.create()
+
     override suspend fun latestRelease(): String? = withContext(Dispatchers.IO) {
         releaseTags().firstOrNull { it.startsWith(DESKTOP_TAG_PREFIX) }?.removePrefix(DESKTOP_TAG_PREFIX)
     }
 
+    // --- The app's own updates ---
+
+    override val updateInstallSupported: Boolean get() = true
+
+    override suspend fun httpText(url: String): String = io.openflux.desktop.data.UpdateDownloads.text(url)
+
+    override fun updateAsset(assets: List<io.openflux.desktop.model.AppAsset>) =
+        DesktopUpdate.pick(assets, os, System.getProperty("os.arch").lowercase(), File("/usr/bin/dpkg").exists())
+
+    override suspend fun downloadUpdate(asset: io.openflux.desktop.model.AppAsset, sha256: String, onProgress: (Long, Long) -> Unit): String {
+        val dir = File(io.openflux.desktop.data.AppDirs.config, "updates")
+        // Installers of earlier updates are of no use any more.
+        dir.listFiles()?.filter { it.name != asset.name }?.forEach { it.delete() }
+        return io.openflux.desktop.data.UpdateDownloads.file(asset.url, dir, asset.name, sha256, onProgress).absolutePath
+    }
+
+    override suspend fun installUpdate(path: String): io.openflux.desktop.model.InstallResult = withContext(Dispatchers.IO) {
+        val file = File(path)
+        require(file.isFile) { "Файл обновления пропал: $path" }
+        val opened = runCatching {
+            if (os.contains("linux")) ProcessBuilder("xdg-open", path).start() else Desktop.getDesktop().open(file)
+        }.isSuccess
+        if (!opened) return@withContext io.openflux.desktop.model.InstallResult(false, "Не удалось открыть установщик: запустите его вручную из $path")
+        if (os.contains("win")) {
+            // The setup program replaces the files OpenFlux runs from; the shutdown hook stops the core and the proxy.
+            Thread {
+                Thread.sleep(2500)
+                kotlin.system.exitProcess(0)
+            }.apply { isDaemon = true; start() }
+        }
+        io.openflux.desktop.model.InstallResult(true, DesktopUpdate.afterOpen(os))
+    }
+
+    override val coreDownloadSupported: Boolean get() = true
+
+    override fun downloadedCore(source: CoreSource): String? = binary.downloadedTag(source)
+
+    override suspend fun downloadCore(source: CoreSource): String = withContext(Dispatchers.IO) { binary.download(source) }
     /** The newest release of either channel; GitHub lists them newest first. */
     override suspend fun latestNightly(): String? = withContext(Dispatchers.IO) {
         releaseTags().firstOrNull { it.startsWith(DESKTOP_TAG_PREFIX) || it.startsWith(NIGHTLY_TAG_PREFIX) }

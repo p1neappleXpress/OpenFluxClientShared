@@ -4,7 +4,37 @@ import kotlinx.serialization.Serializable
 
 /** Where a profile came from; shown in the list and details. */
 @Serializable
-enum class ProfileSource(val label: String) { Manual("Вручную"), Link("Ссылка openflux://"), Qr("QR-код"), Node("Своя нода") }
+enum class ProfileSource(val label: String) {
+    Manual("Вручную"), Link("Ссылка openflux://"), Qr("QR-код"), Node("Своя нода"),
+    /** A location that comes with the subscription: the app keeps it up to date and the user cannot change it. */
+    Subscription("Подписка"),
+    /** A connection bought in the OpenFlux bot, from its short link: kept up to date like a subscription's. */
+    Bot("Бот OpenFlux"),
+}
+
+/** A profile of the subscription: read-only, its key and documents are not shown or shared. */
+val Profile.managed: Boolean get() = source == ProfileSource.Subscription || source == ProfileSource.Bot
+
+/**
+ * A profile of a node the person may run: it has a key and a direct address
+ * (host:port), and is not a subscription's. "Изменить транспорты на сервере" is
+ * offered for it, and asks for the password of the server.
+ */
+val Profile.editableNode: Boolean
+    get() = !managed && !stream && secret.isNotEmpty() &&
+        carriers.any { it.type == TransportType.DIRECT && it.value.substringAfterLast(':', "").toIntOrNull() != null }
+
+/**
+ * The network a carrier leaves through (mobile data, Wi-Fi). Kept on the
+ * device: never in `openflux://` links.
+ */
+@Serializable
+enum class NetworkKind(val cli: String, val label: String) {
+    Default("", "Любая"),
+    Cellular("cellular", "Мобильная"),
+    Wifi("wifi", "Wi-Fi"),
+    Ethernet("ethernet", "Ethernet"),
+}
 
 /** One extra carrier of a Session profile. */
 @Serializable
@@ -13,6 +43,7 @@ data class ExtraTransport(
     val value: String = "",
     val uid: String = "",
     val priority: Int = 50,
+    val network: NetworkKind = NetworkKind.Default,
     /** Which installed script this carrier uses, when [type] is SCRIPT. */
     val scriptId: String = "",
     /**
@@ -54,6 +85,8 @@ data class Profile(
     val extras: List<ExtraTransport> = emptyList(),
     val source: ProfileSource = ProfileSource.Manual,
     val createdAt: Long = 0,
+    /** The main carrier's network (see [NetworkKind]). */
+    val network: NetworkKind = NetworkKind.Default,
     /**
      * The mode without a server: the exit is a PHP node on an ordinary web host, reached over
      * cups.online ([transport] CUPSONLINE, [value] the room's address) or a Mail.ru document
@@ -66,7 +99,7 @@ data class Profile(
 ) {
     /** Every carrier of the profile, main first. */
     val carriers: List<ExtraTransport>
-        get() = listOf(ExtraTransport(transport, value, uid, priority, scriptId, settings)) + if (session) extras else emptyList()
+        get() = listOf(ExtraTransport(transport, value, uid, priority, scriptId = scriptId, settings = settings, network = network)) + if (session) extras else emptyList()
 
     val summary: String
         get() = when {
@@ -105,6 +138,17 @@ data class Profile(
     }
 
     /**
+     * Why the profile must not run as an exit on this device, null when it
+     * may. A node's profile (the wizard's) connects to an exit on a server
+     * that already sits on its documents: a second exit there takes and
+     * answers its clients' packets, and neither works.
+     */
+    fun exitProblem(): String? = if (source != ProfileSource.Node) null else
+        "«$name» — профиль ноды на сервере, её документы уже заняты этой нодой. Как выходная нода на этом устройстве " +
+            "он перехватит трафик её клиентов. Чтобы подключиться к ноде, включите режим «Клиент»; для выходной ноды " +
+            "здесь создайте отдельный профиль со своим документом."
+
+    /**
      * The transports as the core's Session names them: after their type, then
      * type-2, type-3 for repeats, so they match the exit's names (cookie
      * exchange is addressed by name).
@@ -120,6 +164,7 @@ data class Profile(
                 value = carrier.value.trim(),
                 uid = carrier.uid.trim(),
                 priority = carrier.priority,
+                network = carrier.network,
                 scriptId = carrier.scriptId,
                 settings = carrier.settings,
             )
@@ -193,7 +238,8 @@ data class Profile(
             return when (carrier.type.kind) {
                 ValueKind.DocumentUrl -> when {
                     carrier.type == TransportType.CUPSONLINE -> null
-                    carrier.type == TransportType.AVITO -> null
+                    // Avito's rooms are a packed list, not a link.
+                    carrier.type == TransportType.AVITO -> if (value.isEmpty()) "нужен код комнат" else null
                     value.isEmpty() -> "нужна ссылка"
                     !value.startsWith("https://") -> "ссылка должна начинаться с https://"
                     else -> null
@@ -257,6 +303,7 @@ data class SessionSpec(
     val value: String,
     val uid: String,
     val priority: Int,
+    val network: NetworkKind = NetworkKind.Default,
     val scriptId: String = "",
     /** The carrier's own saved script settings; see [ExtraTransport.settings]. */
     val settings: Map<String, String> = emptyMap(),

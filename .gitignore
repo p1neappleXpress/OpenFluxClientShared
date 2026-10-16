@@ -5,3 +5,5 @@ build/
 .idea/
 *.iml
 local.properties
+/.superpowers/
+/shots/

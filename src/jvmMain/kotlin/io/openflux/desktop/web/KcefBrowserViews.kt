@@ -4,8 +4,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
-import io.openflux.desktop.ui.BrowserPage
-import io.openflux.desktop.ui.BrowserViews
+import io.openflux.app.platform.BrowserPage
+import io.openflux.app.platform.BrowserViews
 import java.awt.BorderLayout
 import javax.swing.JPanel
 

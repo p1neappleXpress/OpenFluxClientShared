@@ -16,7 +16,7 @@ import io.openflux.desktop.model.parseScriptParams
 import io.openflux.desktop.service.PlatformServices
 import io.openflux.desktop.service.ScriptSettingsService
 import io.openflux.desktop.service.SettingsPageHost
-import io.openflux.desktop.ui.BrowserPage
+import io.openflux.app.platform.BrowserPage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob

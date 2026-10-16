@@ -8,9 +8,6 @@ import io.openflux.desktop.model.ExtraTransport
 import io.openflux.desktop.model.Profile
 import io.openflux.desktop.model.ScriptCarrierLookup
 import io.openflux.desktop.model.TransportType
-import io.openflux.desktop.ui.profiles.ProfilesTab
-import io.openflux.desktop.ui.scripts.ScriptsTab
-import io.openflux.desktop.ui.shell.appTabs
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -40,13 +37,6 @@ class ExperimentalGateTest {
         assertFalse(Json { ignoreUnknownKeys = true }.decodeFromString(AppSettings.serializer(), old).experimental)
     }
 
-    @Test
-    fun theTransportsTabIsThereOnlyWithTheFeaturesOn() {
-        assertFalse(ScriptsTab in appTabs(false), "the Transports tab is hidden by default")
-        assertTrue(ScriptsTab in appTabs(true))
-        assertEquals(appTabs(true) - ScriptsTab, appTabs(false), "nothing else changes")
-        assertTrue(ProfilesTab in appTabs(false))
-    }
 
     @Test
     fun aProfileThroughAScriptDoesNotConnectUntilTheyAreOn() {

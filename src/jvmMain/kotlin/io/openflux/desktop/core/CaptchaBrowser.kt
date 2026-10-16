@@ -1,6 +1,6 @@
 package io.openflux.desktop.core
 
-import io.openflux.desktop.ui.BrowserPage
+import io.openflux.app.platform.BrowserPage
 import io.openflux.desktop.web.BrowserProxy
 import io.openflux.desktop.web.BuiltInBrowser
 import io.openflux.desktop.web.KcefPage

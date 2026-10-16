@@ -1,5 +1,6 @@
 package io.openflux.desktop.service
 
+import io.openflux.desktop.model.ConnectionMode
 import io.openflux.desktop.model.LogLevel
 import io.openflux.desktop.model.Profile
 import kotlinx.coroutines.CoroutineScope
@@ -21,7 +22,7 @@ class NodeKeepingConnection(
     private val scope: CoroutineScope,
 ) : ConnectionService by inner {
 
-    override fun connect(profile: Profile) {
+    override fun connect(profile: Profile, mode: ConnectionMode?) {
         val node = profile.phpNode
         if (profile.stream && node != null) {
             scope.launch {
@@ -39,7 +40,7 @@ class NodeKeepingConnection(
                 }
             }
         }
-        inner.connect(profile)
+        inner.connect(profile, mode)
     }
 
     companion object {

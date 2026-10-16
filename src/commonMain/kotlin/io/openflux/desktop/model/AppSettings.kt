@@ -34,9 +34,38 @@ fun ExitBackend.describe(needs: String?): String = when (this) {
     ExitBackend.L3 -> "Пересылает пакеты как есть: быстрее, чем L4, но нужны права" + (needs?.let { ": $it" } ?: "") + "."
 }
 
-/** Which core binary runs the connection. */
+/**
+ * Which core binary runs the connection: the one packed with the app, the
+ * newest release downloaded from the core repository ([CoreRepos.CORE]), or a
+ * file of the user's own. Settings show [choices]; [Fork] and [Official] only
+ * keep settings saved by 3.8.1 and older readable, [migrated] turns them into [Release].
+ */
 @Serializable
-enum class CoreSource(val label: String) { Bundled("Встроенное ядро"), Custom("Свой файл") }
+enum class CoreSource(val label: String, val repo: String? = null) {
+    Bundled("Встроенное"),
+    Release("Выпуск с GitHub", CoreRepos.CORE),
+    Custom("Свой файл"),
+    Fork("Выпуск с GitHub", CoreRepos.CORE),
+    Official("Выпуск с GitHub", CoreRepos.CORE);
+
+    companion object {
+        val choices = listOf(Bundled, Release, Custom)
+    }
+}
+
+/** The OpenFlux core repository: the app's core is built from it and its releases are downloaded from it. */
+object CoreRepos {
+    const val CORE = "p1neappleXpress/OpenFlux"
+}
+
+/**
+ * The core the "Своя нода" wizard installs on the server; the node's updater
+ * then follows that repository's releases. [id] is the core's --node-wizard
+ * source.
+ */
+enum class NodeCoreSource(val id: String, val repo: String) {
+    Core("official", CoreRepos.CORE),
+}
 
 /** The Windows proxy settings found before OpenFlux changed them. */
 @Serializable
@@ -83,6 +112,12 @@ data class AppSettings(
     val closeToTray: Boolean = true,
     /** Release channel the update check follows (also the channel of script transports' own updates). */
     val updateChannel: UpdateChannel = UpdateChannel.Stable,
+    /** Look for a newer release of the app on GitHub now and then, and offer it. */
+    val autoUpdate: Boolean = true,
+    /** The release tag the person said "пропустить" to: it is not offered again. */
+    val skippedUpdate: String = "",
+    /** When the app last asked GitHub for a newer release (ms since epoch); 0 = never. */
+    val updateCheckedAt: Long = 0,
     /** Install an update of a first-party script transport without asking (same wire, same key). Others always ask. */
     val autoUpdateScripts: Boolean = true,
     /** When the script transports were last checked for updates (ms since epoch); 0 = never. */
@@ -102,14 +137,29 @@ data class AppSettings(
     /** Set while OpenFlux has changed the Windows proxy; restored on exit or next start. */
     val savedSystemProxy: SavedSystemProxy? = null,
     val sidebarCollapsed: Boolean = false,
+    /**
+     * Developer mode: shows the Accounts tab. Turned on by tapping the app
+     * version in Settings → About ten times, off by its switch there.
+     */
+    val developerMode: Boolean = false,
     /** The main window's last size and place, restored on the next start. */
     val window: WindowBounds? = null,
     /** Node wizard: trusted SSH host keys by "host:port". */
     val knownHostKeys: Map<String, String> = emptyMap(),
+    /**
+     * Open documents as the signed-in account (Accounts tab): the sign-in
+     * goes into the core's cookie store, and to your own nodes.
+     */
+    val useAccountSessions: Boolean = true,
     /** Node wizard: servers used before, newest first. No passwords. */
     val knownServers: List<KnownServer> = emptyList(),
+    /** The new interface's place and screens (JSON of io.openflux.app.nav.NavState), restored at the next start on the desktop. */
+    val navState: String = "",
 )
 
 /** Settings from an older version, brought up to date once on load. */
-fun AppSettings.migrated(): AppSettings =
-    if (systemProxyDefaultOn) this else copy(systemProxy = true, systemProxyDefaultOn = true)
+fun AppSettings.migrated(): AppSettings {
+    val proxied = if (systemProxyDefaultOn) this else copy(systemProxy = true, systemProxyDefaultOn = true)
+    // The fork / original choice is gone: both mean the one core repository.
+    return if (proxied.coreSource == CoreSource.Fork || proxied.coreSource == CoreSource.Official) proxied.copy(coreSource = CoreSource.Release) else proxied
+}

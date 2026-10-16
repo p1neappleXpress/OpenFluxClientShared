@@ -1,5 +1,6 @@
 package io.openflux.desktop.model
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.io.encoding.Base64
@@ -16,4 +17,11 @@ object ScriptSettingsCodec {
 
     fun encode(values: Map<String, String>): String =
         base64.encode(JsonObject(values.mapValues { JsonPrimitive(it.value) }).toString().encodeToByteArray())
+
+    /** What [encode] wrote; empty for an empty or unreadable line. */
+    fun decode(line: String): Map<String, String> = runCatching {
+        if (line.isBlank()) return emptyMap()
+        val obj = Json.parseToJsonElement(base64.decode(line.trim()).decodeToString()) as JsonObject
+        obj.mapValues { (it.value as JsonPrimitive).content }
+    }.getOrDefault(emptyMap())
 }

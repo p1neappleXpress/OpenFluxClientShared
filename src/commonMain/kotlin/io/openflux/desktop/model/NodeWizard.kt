@@ -1,6 +1,7 @@
 package io.openflux.desktop.model
 
 import kotlinx.serialization.Serializable
+import kotlin.random.Random
 
 /** How to reach the VDS. Passwords and the key live only in memory. */
 data class SshTarget(
@@ -41,6 +42,25 @@ data class NodePlan(
     val untouched: List<String> = emptyList(),
 )
 
+/**
+ * How a node forwards its clients' traffic: [L4] terminates their TCP streams (needs no special rights, the default),
+ * [L3] passes their IP packets through raw sockets (needs the CAP_NET_RAW capability and a firewall rule, UDP and
+ * non-TCP traffic work).
+ */
+@Serializable
+enum class NodeMode(val cli: String, val label: String, val about: String) {
+    L4("l4", "L4: потоки TCP", "Подходит всем и ничего не требует от сервера. Так работает нода по умолчанию."),
+    L3(
+        "l3", "L3: IP-пакеты",
+        "Пропускает IP-пакеты целиком, с UDP и ICMP. Серверу нужны iptables и systemd 231+: каналу даётся право CAP_NET_RAW, " +
+            "а пока он работает, исходящие TCP-RST ядра с адреса сервера отбрасываются. Это касается и других сервисов на этом адресе.",
+    );
+
+    companion object {
+        fun of(cli: String): NodeMode = entries.firstOrNull { it.cli == cli.trim().lowercase() } ?: L4
+    }
+}
+
 /** A new channel's name on the server and its encryption key. */
 data class NewChannel(val id: String, val key: String) {
     override fun toString() = "NewChannel($id)"
@@ -49,16 +69,56 @@ data class NewChannel(val id: String, val key: String) {
 /**
  * One of a new channel's carriers besides direct, as the core's
  * provision.ChannelTransport: [type] is the CLI name (vyandex, mailru,
- * cupsonline), [url] the document link or cups.online's room list.
+ * cupsonline, telemost, avito, script), [url] the document link, a packed room
+ * list or a script's primary parameter. A script carrier also names its
+ * package ([script], the installed id), the author's key, the .flux itself
+ * (base64, only to install or replace it; the server never gives it back) and
+ * the settings its wizard saved ([ScriptSettingsCodec]).
  */
 @Serializable
-data class NodeTransport(val type: String, val url: String) {
-    override fun toString() = "NodeTransport($type)"
+data class NodeTransport(
+    val type: String,
+    val url: String = "",
+    val script: String = "",
+    val pubkey: String = "",
+    @kotlinx.serialization.SerialName("package") val pkg: String = "",
+    val params: String = "",
+) {
+    override fun toString() = if (type == TransportType.SCRIPT.cliName) "NodeTransport(script:$script)" else "NodeTransport($type)"
+}
+
+/**
+ * A channel already on the server, as node-install.sh show reports it: its
+ * carriers besides direct, direct's [port], systemd's [state] and the
+ * encryption [context] its links were made with. Changing its documents keeps
+ * the key, the port and the context, so the links handed out keep working.
+ */
+@Serializable
+data class InstalledChannel(
+    @kotlinx.serialization.SerialName("channel") val id: String,
+    val state: String = "",
+    val port: Int = 0,
+    val context: String = "",
+    val transports: List<NodeTransport> = emptyList(),
+    /** "l4" or "l3": how the node forwards traffic (an older installer does not say: l4). */
+    val mode: String = "l4",
+    /** The channel's encryption key, which the server gives its root: the owner's link and profile are made from it. */
+    val key: String = "",
+) {
+    // The key stays out of any log or message.
+    override fun toString() = "InstalledChannel($id, port=$port, $state)"
+
+    val nodeMode: NodeMode get() = NodeMode.of(mode)
+    val running: Boolean get() = state == "active"
+    val transportTypes: List<TransportType> get() = transports.mapNotNull { TransportType.fromCli(it.type) }
 }
 
 object NodeTransports {
     /** What the wizard offers besides direct, in the node's priority order. */
-    val offered = listOf(TransportType.VYANDEX, TransportType.MAILRU, TransportType.CUPSONLINE, TransportType.AVITO)
+    val offered = listOf(
+        TransportType.VYANDEX, TransportType.YANDEX, TransportType.MAILRU, TransportType.TELEMOST, TransportType.BOARDS,
+        TransportType.AVITO, TransportType.CUPSONLINE, TransportType.SCRIPT,
+    )
 
     private val MAILRU_URL = Regex("""^https://cloud\.mail\.ru/public/[A-Za-z0-9_-]{2,64}/[A-Za-z0-9_-]{2,128}$""")
 
@@ -66,11 +126,37 @@ object NodeTransports {
     fun cleanMailru(url: String): String? =
         url.trim().replace(Regex("[?#].*$"), "").trimEnd('/').takeIf(MAILRU_URL::matches)
 
+    /** A Yandex board link with only its hash; null if it is not one. */
+    fun cleanBoard(url: String): String? = YandexBoards.clean(url)
+
+    private val TELEMOST_URL = Regex("""^https://telemost\.yandex\.ru/j/[0-9]{6,32}$""")
+
+    /** A Telemost conference link without query, fragment or trailing slash; null if it is not one. */
+    fun cleanTelemost(url: String): String? =
+        url.trim().replace(Regex("[?#].*$"), "").trimEnd('/').takeIf(TELEMOST_URL::matches)
+
+    private val SCRIPT_ID = Regex("^[a-z0-9][a-z0-9_-]{0,31}$")
+
+    /**
+     * Whether a node can run [script]: a signed .flux (a bare .js needs its signature beside it) whose id the
+     * installer can name a file by.
+     */
+    fun nodeCanRun(script: InstalledScript): Boolean = script.fileName.endsWith(".flux") && SCRIPT_ID.matches(script.id)
+
+    /** Why a script's primary parameter does not fit the node's config line; null when it does. */
+    fun scriptValueProblem(value: String): String? =
+        if (value.length > 4096 || value.any { it == '#' || it == ';' || it == '\n' || it == '\r' }) "без символов # ; и переводов строк" else null
+
     /** How the wizard names [types] for people, primary first: "Volga, Mail.ru и Direct". */
     fun describe(types: List<TransportType>): String {
         val names = (types + TransportType.DIRECT).map { it.shortLabel }
         return if (names.size == 1) names[0] else names.dropLast(1).joinToString(", ") + " и " + names.last()
     }
+}
+
+/** The channel's Yandex document and the sign-in the node may open it with. */
+data class YandexDocument(val url: String, val cookieHeader: String) {
+    override fun toString() = "YandexDocument($url)"
 }
 
 /** A server the wizard has installed on before, to fill the form again. */
@@ -96,10 +182,60 @@ object NodeDocuments {
 
     /** The document link without query or fragment, null if it is not a Yandex document. */
     fun clean(url: String): String? = url.trim().replace(Regex("[?#].*$"), "").takeIf(DOC_URL::matches)
+
+    /** Whether a Cookie header holds a Yandex login (the core's provision.CookieStore check). */
+    fun signedIn(cookieHeader: String): Boolean =
+        cookieHeader.split(';').any { it.trim().substringBefore('=') == "Session_id" && it.contains('=') }
+
+    /**
+     * The name of a new channel's document on Disk: the node's name in Latin
+     * letters, the time (UTC) and a few random letters and digits, like
+     * "moya-noda-20260927-0251-k3f9". Nothing says OpenFlux, and the default
+     * name ("Нода <server>") is left out so the server's address does not end
+     * up on Disk. Fits the [a-z0-9-]{1,64} the document browsers accept.
+     */
+    fun fileName(nodeName: String, host: String, nowMillis: Long, random: Random = Random.Default): String {
+        val name = nodeName.trim().takeUnless { it.isEmpty() || it == "Нода ${host.trim()}" }.orEmpty()
+        val slug = name.lowercase().map { TRANSLIT[it] ?: it.toString() }.joinToString("")
+            .replace("openflux", "")
+            .replace(Regex("[^a-z0-9]+"), "-").trim('-').take(24).trim('-')
+        val suffix = (1..4).map { ALPHABET[random.nextInt(ALPHABET.length)] }.joinToString("")
+        return listOf(slug, utcStamp(nowMillis), suffix).filter { it.isNotEmpty() }.joinToString("-")
+    }
+
+    private const val ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+    private val TRANSLIT = mapOf(
+        'а' to "a", 'б' to "b", 'в' to "v", 'г' to "g", 'д' to "d", 'е' to "e", 'ё' to "e", 'ж' to "zh",
+        'з' to "z", 'и' to "i", 'й' to "y", 'к' to "k", 'л' to "l", 'м' to "m", 'н' to "n", 'о' to "o",
+        'п' to "p", 'р' to "r", 'с' to "s", 'т' to "t", 'у' to "u", 'ф' to "f", 'х' to "h", 'ц' to "ts",
+        'ч' to "ch", 'ш' to "sh", 'щ' to "sch", 'ъ' to "", 'ы' to "y", 'ь' to "", 'э' to "e", 'ю' to "yu",
+        'я' to "ya",
+    )
+
+    /** yyyyMMdd-HHmm in UTC, without a date library in common code. */
+    private fun utcStamp(millis: Long): String {
+        val minutes = millis / 60_000
+        val days = minutes.floorDiv(1440L)
+        val minuteOfDay = minutes.mod(1440L)
+        // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+        val z = days + 719468
+        val era = z.floorDiv(146097L)
+        val doe = z - era * 146097
+        val yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+        val doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+        val mp = (5 * doy + 2) / 153
+        val day = doy - (153 * mp + 2) / 5 + 1
+        val month = if (mp < 10) mp + 3 else mp - 9
+        val year = yoe + era * 400 + if (month <= 2) 1 else 0
+        fun two(n: Long) = n.toString().padStart(2, '0')
+        return "$year${two(month)}${two(day)}-${two(minuteOfDay / 60)}${two(minuteOfDay % 60)}"
+    }
 }
 
 object NodeServers {
-    const val MAX_KNOWN = 5
+    /** The person's servers: the Servers list shows them all, so not just a few recent ones. */
+    const val MAX_KNOWN = 50
 
     /** The key [AppSettings.knownHostKeys] keeps a server's fingerprint under. */
     fun hostKeyId(host: String, port: Int) = "${host.trim().lowercase()}:$port"

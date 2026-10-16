@@ -34,10 +34,9 @@ kotlin {
             implementation(libs.compose.components.resources)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.json)
-            api(libs.voyager.navigator)
-            api(libs.voyager.tabNavigator)
-            api(libs.voyager.screenmodel)
-            implementation(libs.voyager.transitions)
+            implementation(libs.navigation3.ui)
+            implementation(libs.lifecycle.viewmodel.compose)
+            implementation(libs.lifecycle.viewmodel.navigation3)
         }
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
@@ -51,6 +50,8 @@ kotlin {
             implementation(libs.kotlin.test)
             implementation(libs.kotlin.testJunit)
             implementation(libs.kotlinx.coroutines.test)
+            implementation(compose.desktop.currentOs)
+            implementation(libs.compose.uiTest)
         }
     }
 }

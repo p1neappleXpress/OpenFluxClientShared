@@ -1,7 +1,7 @@
 package io.openflux.desktop.web
 
 import io.openflux.desktop.service.SettingsPageHost
-import io.openflux.desktop.ui.BrowserPage
+import io.openflux.app.platform.BrowserPage
 
 /** Shows a script's settings wizard in the built-in browser (KCEF), answered on its own channel. */
 object KcefSettingsPageHost : SettingsPageHost {

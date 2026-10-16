@@ -1,11 +1,13 @@
 package io.openflux.desktop
 
+import io.openflux.desktop.model.ProfileSource
 import io.openflux.desktop.model.AppSettings
 import io.openflux.desktop.model.ConnectionMode
 import io.openflux.desktop.model.CoreConfig
 import io.openflux.desktop.model.CorePaths
 import io.openflux.desktop.model.ExitBackend
 import io.openflux.desktop.model.ExtraTransport
+import io.openflux.desktop.model.NetworkKind
 import io.openflux.desktop.model.Profile
 import io.openflux.desktop.model.TransportType
 import kotlin.test.Test
@@ -33,6 +35,22 @@ class CoreConfigTest {
     )
 
     @Test
+    fun clientConfNamesNetworks() {
+        val bound = session.copy(
+            network = NetworkKind.Cellular,
+            extras = listOf(ExtraTransport(TransportType.MAILRU, "https://cloud.mail.ru/public/a/b", priority = 90, network = NetworkKind.Wifi)),
+        )
+        val conf = CoreConfig.build(bound, AppSettings(), paths).conf!!
+        val lines = conf.lines().map { it.trim() }
+        assertEquals("Network = cellular", lines[lines.indexOf("[Transport vyandex]") + 3], conf)
+        assertTrue("Network = wifi" in conf)
+        assertFalse("Bonding" in conf)
+        // Without a network nothing changes.
+        val plain = CoreConfig.build(session, AppSettings(), paths).conf!!
+        assertFalse("Network =" in plain)
+    }
+
+    @Test
     fun sessionClientConf() {
         val launch = CoreConfig.build(session, AppSettings(socksPort = 1090), paths)
         val conf = launch.conf!!
@@ -52,6 +70,22 @@ class CoreConfigTest {
         assertEquals("127.0.0.1:1090", launch.socksAddress)
         assertEquals("127.0.0.1:1091", launch.httpProxyAddress)
         assertTrue(launch.usesIpc)
+    }
+
+    /** The core refuses Telemost under its TUN: a Session goes without it, Telemost alone does not start. */
+    @Test
+    fun telemostIsLeftOutOfTheFullTunnel() {
+        val withTelemost = session.copy(extras = session.extras + ExtraTransport(TransportType.TELEMOST, "https://telemost.yandex.ru/j/88936358186517", priority = 85))
+        assertTrue("Type = telemost" in CoreConfig.build(withTelemost, AppSettings(), paths).conf!!, "the proxies keep it")
+        val tun = CoreConfig.build(withTelemost, AppSettings(fullTunnel = true), paths).conf!!
+        assertFalse("telemost" in tun)
+        assertTrue("Type = vyandex" in tun && "Type = direct" in tun, "the rest still connects")
+
+        val alone = Profile(id = "t", name = "T", transport = TransportType.TELEMOST, value = "https://telemost.yandex.ru/j/88936358186517", secret = secret)
+        assertTrue("--transport=telemost" in CoreConfig.build(alone, AppSettings(), paths).arguments)
+        assertEquals(CoreConfig.TELEMOST_TUN, assertFailsWith<IllegalArgumentException> { CoreConfig.build(alone, AppSettings(fullTunnel = true), paths) }.message)
+        val onlyTelemost = alone.copy(session = true)
+        assertEquals(CoreConfig.TELEMOST_TUN, assertFailsWith<IllegalArgumentException> { CoreConfig.build(onlyTelemost, AppSettings(fullTunnel = true), paths) }.message)
     }
 
     @Test
@@ -89,6 +123,17 @@ class CoreConfigTest {
         assertTrue(launch.arguments.containsAll(listOf("--share", "--share-host=my.host", "--debug=2")))
         assertFalse(launch.arguments.any { it.startsWith("--http-proxy") })
         assertNull(launch.socksAddress)
+    }
+
+    @Test
+    fun aNodesProfileDoesNotRunAsAnExitHere() {
+        val node = session.copy(source = ProfileSource.Node)
+        val exit = AppSettings(mode = ConnectionMode.Exit)
+        val e = assertFailsWith<IllegalArgumentException> { CoreConfig.build(node, exit, paths) }
+        assertTrue("режим «Клиент»" in e.message.orEmpty())
+        // As a client it connects to the node, as before.
+        assertTrue("Role = client" in CoreConfig.build(node, AppSettings(), paths).conf!!)
+        assertNull(session.exitProblem())
     }
 
     @Test

@@ -6,12 +6,13 @@ import io.openflux.desktop.data.AppDirs
 import io.openflux.desktop.data.restrictToOwner
 import io.openflux.desktop.model.AppSettings
 import io.openflux.desktop.model.CaptchaPrompt
-import io.openflux.desktop.ui.BrowserPage
+import io.openflux.app.platform.BrowserPage
 import io.openflux.desktop.platform.MacElevation
 import io.openflux.desktop.platform.WindowsCoreElevation
 import io.openflux.desktop.platform.WindowsElevation
 import io.openflux.desktop.web.BrowserLog
 import io.openflux.desktop.model.ConnectionMode
+import io.openflux.desktop.model.ConnectionNarrative
 import io.openflux.desktop.model.ExitBackend
 import io.openflux.desktop.model.ConnectionState
 import io.openflux.desktop.model.CoreConfig
@@ -24,6 +25,10 @@ import io.openflux.desktop.model.Profile
 import io.openflux.desktop.model.TrafficStats
 import io.openflux.desktop.model.isActive
 import io.openflux.desktop.platform.WindowsSystemProxy
+import io.openflux.desktop.data.CookieStoreSeeder
+import io.openflux.desktop.model.AccountKind
+import io.openflux.desktop.model.ProfileSource
+import io.openflux.desktop.service.Accounts
 import io.openflux.desktop.service.ConnectionService
 import io.openflux.desktop.service.SettingsRepository
 import io.openflux.desktop.web.BuiltInBrowser
@@ -36,8 +41,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.jsonArray
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.file.Files
@@ -59,6 +66,7 @@ import java.util.concurrent.atomic.AtomicLong
 class CoreConnectionService(
     private val settings: SettingsRepository,
     private val binary: CoreBinary,
+    private val accounts: Accounts,
     private val scripts: DesktopScriptRepository,
 ) : ConnectionService {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -85,6 +93,8 @@ class CoreConnectionService(
     private val captchaBrowser = CaptchaBrowser()
     override val captchaPage: StateFlow<BrowserPage?> = captchaBrowser.page
     private var pendingCaptcha: IpcCookiesRequest? = null
+    /** "Позже": checks for a Yandex page stay quiet until then (the other transports carry on); a new connection resets it. */
+    @Volatile private var captchaSnoozedUntil = 0L
 
     /** One started core: its process, files and the settings it began with. */
     private class Run(
@@ -98,6 +108,8 @@ class CoreConnectionService(
         val elevated: Elevated? = null,
         val jobs: MutableList<Job> = mutableListOf(),
     ) {
+        /** The sign-ins handed to the exit this run, not to send the same twice. */
+        val pushed = java.util.concurrent.ConcurrentHashMap<AccountKind, Map<String, String>>()
         @Volatile var ipc: CoreIpc? = null
         @Volatile var stopping = false
         @Volatile var lastProblem: String? = null
@@ -132,15 +144,54 @@ class CoreConnectionService(
         scope.launch {
             settings.settings.distinctUntilChangedBy { it.systemProxy }.collect { applySystemProxy() }
         }
+        // A fresh sign-in (after it expired) goes on to your own node at once.
+        scope.launch {
+            accounts.sessions.drop(1).collect { sessions ->
+                val current = synchronized(lock) { run } ?: return@collect
+                if (_state.value !is ConnectionState.Connected || !ownsExit(current)) return@collect
+                for ((kind, session) in sessions) {
+                    if (!kind.opensSignedIn) continue
+                    if (session.expired || current.pushed[kind] == session.cookies) continue
+                    pushQuietly(current, kind)
+                }
+            }
+        }
         scope.launch {
             BuiltInBrowser.submissions.collect { json -> onSetupSubmission(json) }
         }
     }
 
-    override fun connect(profile: Profile) {
+    /** Your own node (from the wizard): it may get your sign-in without asking. */
+    private fun ownsExit(run: Run) =
+        run.settings.mode == ConnectionMode.Client && run.usesIpc && run.profile.source == ProfileSource.Node &&
+            run.settings.useAccountSessions
+
+    private suspend fun pushQuietly(run: Run, kind: AccountKind) {
+        runCatching { pushTo(run, kind) }
+            .onFailure { log(LogLevel.Warning, "Не удалось передать вход ${kind.label} ноде: ${it.message}") }
+    }
+
+    override suspend fun pushAccountToExit(kind: AccountKind): Int {
+        val current = synchronized(lock) { run } ?: throw IllegalStateException("Нет подключения к ноде")
+        return pushTo(current, kind)
+    }
+
+    private fun pushTo(run: Run, kind: AccountKind): Int {
+        check(run.settings.mode == ConnectionMode.Client && run.usesIpc) { "Передать вход можно только ноде профиля Session" }
+        val ipc = run.ipc ?: throw IllegalStateException("Нет связи с ядром")
+        val session = accounts.validSession(kind) ?: throw IllegalStateException("Сначала войдите в ${kind.label}")
+        val names = run.profile.sessionSpecs().filter { it.type in kind.signedInTransports }.map { it.name }
+        check(names.isNotEmpty()) { "В профиле нет транспортов ${kind.label}" }
+        names.forEach { ipc.offerCookies(IpcCookiesOffer(it, session.cookies, remote = true)) }
+        run.pushed[kind] = session.cookies
+        log(LogLevel.Success, "Вход ${kind.label} передан ноде (${names.size} транспорт.)")
+        return names.size
+    }
+
+    override fun connect(profile: Profile, mode: ConnectionMode?) {
         scope.launch {
             synchronized(lock) { run }?.let { stopRun(it, restart = true) }
-            start(profile)
+            start(profile, mode)
         }
     }
 
@@ -148,16 +199,18 @@ class CoreConnectionService(
         scope.launch { synchronized(lock) { run }?.let { stopRun(it, restart = false) } }
     }
 
-    private fun start(profile: Profile) {
-        val current = settings.settings.value
+    private fun start(profile: Profile, mode: ConnectionMode?) {
+        val current = settings.settings.value.let { s -> mode?.let { s.copy(mode = it) } ?: s }
         _exitShareLink.value = null
         _exitAddress.value = ExitAddress.Unknown
         _traffic.value = TrafficStats()
         _captcha.value = null
+        captchaSnoozedUntil = 0
         val files = mutableListOf<File>()
         try {
             val core = binary.resolve(current) ?: throw IllegalStateException(
                 if (current.coreSource == CoreSource.Custom) "Файл ядра не найден: ${current.customCorePath}"
+                else if (current.coreSource.repo != null) "Ядро «${current.coreSource.label}» ещё не скачано: Настройки → Ядро → Скачать"
                 else "В этой сборке нет встроенного ядра: установите релиз с GitHub, соберите приложение с Go " +
                     "(./gradlew соберёт ядро сам) или укажите файл ядра в настройках",
             )
@@ -189,6 +242,9 @@ class CoreConnectionService(
                 ipcSocket = ipcSocket?.absolutePath,
             )
             val launch = CoreConfig.build(profile, current, paths, scripts::carrier)
+            if (current.useAccountSessions) {
+                CookieStoreSeeder.seed(File(paths.cookieStore), profile, accounts.sessions.value)
+            }
             if (launch.conf != null) {
                 confFile.writeText(launch.conf)
                 restrictToOwner(confFile)
@@ -306,6 +362,8 @@ class CoreConnectionService(
     private fun onCoreLine(run: Run, line: String) {
         val level = levelOf(line)
         log(level, line)
+        // Next to the core's own words, the same thing said plainly for a person.
+        ConnectionNarrative.readCoreLine(line)?.let { log(it.level, it.text) }
         friendlyProblem(line)?.let { run.lastProblem = it }
         if (!run.stopping) SHARE_LINK.find(line)?.let { _exitShareLink.value = it.value }
         // Without a Session's IPC status (classic profiles) the core's start
@@ -376,7 +434,7 @@ class CoreConnectionService(
         run.logJobs.forEach { it.join() }
         cleanup(run)
         if (run.stopping) return
-        val message = run.lastProblem ?: "Ядро остановилось (код $code)"
+        val message = run.lastProblem ?: "Ядро остановилось (код $code). Причина в последних строках журнала выше"
         log(LogLevel.Error, message)
         _state.value = ConnectionState.Failed(run.profile, message)
     }
@@ -388,9 +446,12 @@ class CoreConnectionService(
         val current = _state.value
         if (current !is ConnectionState.Connected) {
             _state.value = ConnectionState.Connected(run.profile, run.settings.mode, run.connectedSince)
-            if (first) log(LogLevel.Success, if (run.settings.mode == ConnectionMode.Exit) "Нода запущена" else "Подключено к ноде")
+            if (first) ConnectionNarrative.linkUp(run.settings.mode, _traffic.value.activeCarriers).let { log(it.level, it.text) }
             applySystemProxy()
             if (run.settings.mode == ConnectionMode.Client) refreshExitAddress()
+            if (first && ownsExit(run)) scope.launch {
+                accounts.sessions.value.values.filter { !it.expired && it.kind.opensSignedIn }.forEach { pushQuietly(run, it.kind) }
+            }
         }
     }
 
@@ -501,6 +562,7 @@ class CoreConnectionService(
         if (proxy == null && !checked.settings.fullTunnel) return
         _exitAddress.value = ExitAddress.Checking
         scope.launch {
+            val startedAt = System.currentTimeMillis()
             val result = runCatching {
                 val builder = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20))
                 if (proxy != null) {
@@ -516,7 +578,15 @@ class CoreConnectionService(
                 ExitAddress.Known(body)
             }.getOrElse { ExitAddress.Unavailable(it.message ?: "нет ответа") }
             // A disconnect during the check leaves the address unknown.
-            if (synchronized(lock) { run } === checked) _exitAddress.value = result
+            if (synchronized(lock) { run } === checked) {
+                _exitAddress.value = result
+                // The journal says whether the node is proven, not only that a link is up.
+                when (result) {
+                    is ExitAddress.Known -> ConnectionNarrative.nodeConfirmed(result.ip, System.currentTimeMillis() - startedAt).let { log(it.level, it.text) }
+                    is ExitAddress.Unavailable -> ConnectionNarrative.nodeNotConfirmed(result.reason).forEach { log(it.level, it.text) }
+                    else -> Unit
+                }
+            }
         }
     }
 
@@ -524,6 +594,8 @@ class CoreConnectionService(
 
     private fun onCaptchaRequest(request: IpcCookiesRequest) {
         if (pendingCaptcha == request) return
+        // A script's own setup page was asked for by the person; only a Yandex check is snoozed.
+        if (!request.isOwn && System.currentTimeMillis() < captchaSnoozedUntil) return
         pendingCaptcha = request
         log(
             LogLevel.Warning,
@@ -603,6 +675,7 @@ class CoreConnectionService(
     }
 
     override fun dismissCaptcha() {
+        if (pendingCaptcha?.isOwn == false) captchaSnoozedUntil = System.currentTimeMillis() + CAPTCHA_SNOOZE_MS
         pendingCaptcha = null
         _captcha.value = null
         captchaBrowser.close()
@@ -632,6 +705,7 @@ class CoreConnectionService(
 
     companion object {
         private const val MAX_LOG_LINES = 5000
+        private const val CAPTCHA_SNOOZE_MS = 10 * 60_000L
         /** How long the core has to open its IPC socket before the log takes over. */
         private const val IPC_WAIT_MS = 8000L
         /** How long a root core has to take its routes down after the stop file appears. */
@@ -665,6 +739,7 @@ class CoreConnectionService(
                 lower.contains("setup utun") || lower.contains("open utun") -> "Не удалось поднять интерфейс utun: ${line.substringAfter("utun").trim(':', ' ').take(160)}"
                 lower.contains("--config:") -> "Ядро не приняло конфигурацию: ${line.substringAfter("--config:").trim()}"
                 lower.contains("failed to start transport") -> "Транспорт не запустился: ${line.substringAfter("transport:").trim().take(160)}"
+                ConnectionNarrative.explainFatal(line) != null -> ConnectionNarrative.explainFatal(line)
                 lower.contains("fatal") || lower.contains("log.fatal") -> line.substringAfter(": ").take(200)
                 else -> null
             }
@@ -704,7 +779,64 @@ class CoreBinary {
     fun resolve(settings: AppSettings): File? = when (settings.coreSource) {
         CoreSource.Custom -> File(settings.customCorePath.trim()).takeIf { settings.customCorePath.isNotBlank() && it.isFile }
         CoreSource.Bundled -> bundled()
+        CoreSource.Release, CoreSource.Fork, CoreSource.Official -> downloaded(settings.coreSource)
     }?.let(::runnable)
+
+    /**
+     * The core for the node wizard: the bundled one, whose --node-wizard
+     * protocol matches this app; the chosen one only when there is none.
+     */
+    fun wizardCore(settings: AppSettings): File? = bundled()?.let(::runnable) ?: resolve(settings)
+
+    private fun downloadDir(source: CoreSource): File =
+        File(AppDirs.config, "cores/" + source.repo!!.replace('/', '_'))
+
+    private fun downloadedDir(source: CoreSource): File? =
+        downloadDir(source).takeIf { File(it, fileName).isFile }
+
+    /** The core downloaded for [source], null when none. */
+    fun downloaded(source: CoreSource): File? =
+        source.repo?.let { downloadedDir(source)?.let { dir -> File(dir, fileName) } }
+
+    /** The release tag of [downloaded]. */
+    fun downloadedTag(source: CoreSource): String? =
+        source.repo?.let { downloadedDir(source)?.let { dir -> File(dir, "tag").takeIf(File::isFile)?.readText()?.trim() } }
+
+    /**
+     * Downloads the newest v* release core for this OS from [source]'s
+     * repository and keeps it if its SHA-256 is the one the release's
+     * SHA256SUMS.txt names. Returns the release tag.
+     */
+    fun download(source: CoreSource): String {
+        val repo = source.repo ?: throw IllegalArgumentException("$source is not downloaded")
+        val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15))
+            .followRedirects(HttpClient.Redirect.NORMAL).build()
+        fun get(url: String): HttpResponse<ByteArray> {
+            val response = http.send(
+                HttpRequest.newBuilder(URI(url)).header("User-Agent", "OpenFlux-Desktop").timeout(Duration.ofMinutes(3)).build(),
+                HttpResponse.BodyHandlers.ofByteArray(),
+            )
+            if (response.statusCode() != 200) throw IllegalStateException("GitHub ответил ${response.statusCode()} на $url")
+            return response
+        }
+        val releases = kotlinx.serialization.json.Json.parseToJsonElement(
+            String(get("https://api.github.com/repos/$repo/releases?per_page=30").body(), Charsets.UTF_8),
+        ).jsonArray
+        val asset = CoreReleases.pick(releases, fileName)
+            ?: throw IllegalStateException("В релизах $repo нет ядра $fileName")
+        val want = CoreReleases.sha256(String(get(asset.sumsUrl).body(), Charsets.UTF_8), fileName)
+            ?: throw IllegalStateException("В SHA256SUMS.txt релиза ${asset.tag} нет $fileName")
+        val body = get(asset.url).body()
+        val got = java.security.MessageDigest.getInstance("SHA-256").digest(body).joinToString("") { "%02x".format(it) }
+        if (got != want) throw IllegalStateException("SHA-256 скачанного ядра ${asset.tag} не совпал с SHA256SUMS.txt")
+        val dir = downloadDir(source).apply { mkdirs() }
+        val tmp = File(dir, "$fileName.download")
+        tmp.writeBytes(body)
+        tmp.setExecutable(true, true)
+        Files.move(tmp.toPath(), File(dir, fileName).toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        File(dir, "tag").writeText(asset.tag)
+        return asset.tag
+    }
 
     /**
      * On Linux and macOS the core must be executable. A package may lose the

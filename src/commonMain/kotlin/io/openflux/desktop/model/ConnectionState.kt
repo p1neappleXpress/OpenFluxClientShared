@@ -60,6 +60,11 @@ sealed interface ExitAddress {
     data object Checking : ExitAddress
     data class Known(val ip: String) : ExitAddress
     data class Unavailable(val reason: String) : ExitAddress
+    /**
+     * This app cannot ask from here: on Android its own traffic stays out
+     * of its VPN. The tunnel itself may be fine; [reason] says where to look.
+     */
+    data class NotCheckable(val reason: String) : ExitAddress
 }
 
 /**

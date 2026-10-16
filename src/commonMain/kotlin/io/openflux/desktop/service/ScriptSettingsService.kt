@@ -3,7 +3,7 @@ package io.openflux.desktop.service
 import io.openflux.desktop.model.ScriptSettingsMessages
 import io.openflux.desktop.model.ScriptSettingsPage
 import io.openflux.desktop.model.SetupPages
-import io.openflux.desktop.ui.BrowserPage
+import io.openflux.app.platform.BrowserPage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
