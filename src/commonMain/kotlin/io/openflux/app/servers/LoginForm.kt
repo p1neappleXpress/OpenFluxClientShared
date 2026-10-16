@@ -25,7 +25,7 @@ class LoginForm(private val link: ServerLink) {
     var privateKey by mutableStateOf("")
     var passphrase by mutableStateOf("")
     var sudo by mutableStateOf("")
-    var core by mutableStateOf(NodeCoreSource.Fork)
+    var core by mutableStateOf(NodeCoreSource.Official)
     var error by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false)
         private set

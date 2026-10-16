@@ -357,7 +357,7 @@ class JvmPlatformServices(
 
     companion object {
         /** Where the desktop releases are published, tagged v1.2.3. */
-        const val RELEASE_REPO = "meepo161/OpenFluxDesktop"
+        const val RELEASE_REPO = "p1neappleXpress/OpenFluxDesktop"
         const val DESKTOP_TAG_PREFIX = "v"
         /** Nightly test builds are tagged nightly-<date>-<commit>, as prereleases. */
         const val NIGHTLY_TAG_PREFIX = "nightly-"

@@ -72,7 +72,7 @@ class ServerLink(private val container: AppContainer) {
      * Connects to [target] and keeps the way in for later calls; returns the server's id. A key not seen before
      * (or changed) fails with [hostKeyPrompt] set: [trust] goes on with it.
      */
-    suspend fun connect(target: SshTarget, source: NodeCoreSource = NodeCoreSource.Fork): String {
+    suspend fun connect(target: SshTarget, source: NodeCoreSource = NodeCoreSource.Official): String {
         val id = serverIdOf(target.host, target.port, target.user)
         val known = settings.settings.value.knownHostKeys[NodeServers.hostKeyId(target.host, target.port)].orEmpty()
         val a = Access(target.copy(host = target.host.trim(), user = target.user.trim(), hostKey = target.hostKey.ifEmpty { known }), source)
