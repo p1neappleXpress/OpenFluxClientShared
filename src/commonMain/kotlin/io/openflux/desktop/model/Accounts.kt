@@ -31,8 +31,10 @@ enum class AccountKind(
     val finishCookie: String? = null,
     /**
      * Whether the core opens this service's documents as the signed-in
-     * user. Mail.ru's transport opens its document anonymously, and Cloud
-     * refuses that request (403) when it carries an account's cookies.
+     * user. The core opens a Mail.ru document signed in, with Cloud's CSRF
+     * token (p1neappleXpress/OpenFlux#206); an older core opens it
+     * anonymously, and Cloud refuses that (403) when it carries an
+     * account's cookies.
      */
     val opensSignedIn: Boolean = true,
 ) {
@@ -47,7 +49,7 @@ enum class AccountKind(
         waitForHome = false,
         finishUrl = "https://cloud.mail.ru/home/",
         finishCookie = "sdcs",
-        opensSignedIn = false,
+        opensSignedIn = true,
     ),
     Max("MAX", "ic_max", "https://web.max.ru/", "https://web.max.ru/", ".max.ru", false, setOf(TransportType.ONEME), signsIn = false);
 
@@ -61,8 +63,8 @@ enum class AccountKind(
 
     /**
      * The carriers the core opens as the signed-in user, which get the
-     * account's cookies. A Yandex board is joined as a guest, and the
-     * Mail.ru document anonymously, so neither does.
+     * account's cookies. A Yandex board is joined as a guest, so it does
+     * not.
      */
     val signedInTransports: Set<TransportType>
         get() = if (!opensSignedIn) emptySet() else transports - TransportType.BOARDS
